@@ -23,13 +23,10 @@ public final class RepoWatcher: @unchecked Sendable {
 
     // MARK: Pruned directory names
     //
-    // RepoScanner does not exist on this branch, so the pruned-names set is
-    // defined locally per the task brief. The controller will reconcile this
-    // with `RepoScanner.prunedNames` once both land on the integration branch.
-    static let prunedNames: Set<String> = [
-        "node_modules", "Pods", "DerivedData", "Carthage",
-        "vendor", "__pycache__", "target", ".build",
-    ]
+    // The scanner's pruned set, plus `.build`: build artifacts churn constantly
+    // and must never trigger status refreshes, but the scanner has no reason to
+    // skip them (they contain no repos).
+    static let prunedNames: Set<String> = RepoScanner.prunedNames.union([".build"])
 
     // MARK: Stored, immutable
 
