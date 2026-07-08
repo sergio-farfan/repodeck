@@ -15,7 +15,7 @@ final class RepoViewModel: @MainActor Identifiable {
     var isMissing = false
     /// Draft commit message bound to `CommitBoxView`'s text field.
     var commitMessage: String = ""
-    /// Populated by `refreshLog()`; rendered by `HistoryList` (Task 15).
+    /// Populated by `refreshLog()`; rendered by `HistoryListView`.
     var commits: [Commit] = []
     /// True while a stage/unstage/commit/sync action is running; `refreshStatus`
     /// never touches this — refresh is a passive, always-allowed operation.

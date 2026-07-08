@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Container for the selected repo's detail pane: an `ErrorBanner` for the
 /// most recent action failure, a commit box, sync controls (pull/push/
-/// fetch), the changes list, and history (Task 15).
+/// fetch), the changes list, and the commit history.
 struct RepoDetailView: View {
     let vm: RepoViewModel
 
@@ -22,11 +22,7 @@ struct RepoDetailView: View {
 
             Divider()
 
-            Text("History")
-                .font(.headline)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
+            HistoryListView(vm: vm)
         }
         .navigationTitle(vm.repo.name)
         .task(id: vm.id) {
