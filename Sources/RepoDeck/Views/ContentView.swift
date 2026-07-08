@@ -11,6 +11,11 @@ struct ContentView: View {
             detailContent
         }
         .frame(minWidth: 800, minHeight: 500)
+        .task {
+            if !model.trackedFolders.isEmpty && model.repos.isEmpty {
+                await model.rescan()
+            }
+        }
         .toolbar {
             ToolbarItemGroup {
                 Button {
