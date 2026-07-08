@@ -11,17 +11,63 @@ import RepoDeckKit
 @Observable
 final class AppModel {
     private static let trackedFolderPathsKey = "trackedFolderPaths"
+    private static let pinnedRepoIDsKey = "pinnedRepoIDs"
 
     var trackedFolders: [URL]
     var repos: [RepoViewModel] = []
     var isScanning = false
     var selectedRepoID: String?
+    var pinnedRepoIDs: Set<String>
+    var filterText: String = ""
 
     let client = GitClient()
 
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
         trackedFolders = paths.map { URL(fileURLWithPath: $0) }
+
+        let pinnedIDs = UserDefaults.standard.stringArray(forKey: Self.pinnedRepoIDsKey) ?? []
+        pinnedRepoIDs = Set(pinnedIDs)
+    }
+
+    /// Repos matching `filterText` (name or branch, case-insensitive) that are
+    /// pinned, alphabetical. Empty when no pinned repo matches.
+    var filteredPinned: [RepoViewModel] {
+        filteredAndSorted(repos.filter { pinnedRepoIDs.contains($0.id) })
+    }
+
+    /// Repos matching `filterText` that are not pinned, alphabetical.
+    var filteredUnpinned: [RepoViewModel] {
+        filteredAndSorted(repos.filter { !pinnedRepoIDs.contains($0.id) })
+    }
+
+    /// Adds or removes `id` from the pinned set and persists it.
+    func togglePin(_ id: String) {
+        if pinnedRepoIDs.contains(id) {
+            pinnedRepoIDs.remove(id)
+        } else {
+            pinnedRepoIDs.insert(id)
+        }
+        UserDefaults.standard.set(Array(pinnedRepoIDs), forKey: Self.pinnedRepoIDsKey)
+    }
+
+    /// Drops a repo from the in-memory list only (e.g. a missing repo the
+    /// user dismissed). It returns on the next rescan if still on disk.
+    func removeRepo(_ id: String) {
+        repos.removeAll { $0.id == id }
+        if selectedRepoID == id {
+            selectedRepoID = nil
+        }
+    }
+
+    /// Concurrently refreshes every repo's status. `ProcessRunner`'s global
+    /// semaphore bounds real subprocess concurrency, so no extra limiter here.
+    func refreshAllStatuses() async {
+        await withTaskGroup(of: Void.self) { group in
+            for vm in repos {
+                group.addTask { await vm.refreshStatus() }
+            }
+        }
     }
 
     /// Presents an `NSOpenPanel` for choosing one or more folders, appends any
@@ -88,10 +134,25 @@ final class AppModel {
         if let selectedRepoID, !repos.contains(where: { $0.id == selectedRepoID }) {
             self.selectedRepoID = nil
         }
+
+        await refreshAllStatuses()
     }
 
     private func saveTrackedFolders() {
         let paths = trackedFolders.map { $0.path }
         UserDefaults.standard.set(paths, forKey: Self.trackedFolderPathsKey)
+    }
+
+    private func filteredAndSorted(_ list: [RepoViewModel]) -> [RepoViewModel] {
+        list
+            .filter { matchesFilter($0) }
+            .sorted { $0.repo.name.localizedCaseInsensitiveCompare($1.repo.name) == .orderedAscending }
+    }
+
+    private func matchesFilter(_ vm: RepoViewModel) -> Bool {
+        guard !filterText.isEmpty else { return true }
+        if vm.repo.name.localizedCaseInsensitiveContains(filterText) { return true }
+        if let branch = vm.status?.branch, branch.localizedCaseInsensitiveContains(filterText) { return true }
+        return false
     }
 }

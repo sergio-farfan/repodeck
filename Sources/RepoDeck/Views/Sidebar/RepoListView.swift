@@ -7,12 +7,21 @@ struct RepoListView: View {
         @Bindable var model = model
 
         List(selection: $model.selectedRepoID) {
+            if !model.filteredPinned.isEmpty {
+                Section("Pinned") {
+                    ForEach(model.filteredPinned) { vm in
+                        RepoRowView(vm: vm)
+                    }
+                }
+            }
+
             Section("Repositories") {
-                ForEach(model.repos) { vm in
+                ForEach(model.filteredUnpinned) { vm in
                     RepoRowView(vm: vm)
                 }
             }
         }
         .listStyle(.sidebar)
+        .searchable(text: $model.filterText, placement: .sidebar, prompt: "Filter repositories")
     }
 }
