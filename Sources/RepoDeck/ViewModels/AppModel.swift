@@ -12,6 +12,10 @@ import RepoDeckKit
 final class AppModel {
     private static let trackedFolderPathsKey = "trackedFolderPaths"
     private static let pinnedRepoIDsKey = "pinnedRepoIDs"
+    /// Minimum interval between watcher-triggered rescans. Guards against
+    /// rescan storms when a burst of `.possibleNewRepo` events lands right
+    /// after a rescan already ran (e.g. a multi-step `git clone`).
+    private static let rescanStormInterval: TimeInterval = 2
 
     var trackedFolders: [URL]
     var repos: [RepoViewModel] = []
@@ -22,12 +26,28 @@ final class AppModel {
 
     let client = GitClient()
 
+    private let watcher = RepoWatcher()
+    private var watcherTask: Task<Void, Never>?
+    private var lastRescanAt: Date?
+
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
         trackedFolders = paths.map { URL(fileURLWithPath: $0) }
 
         let pinnedIDs = UserDefaults.standard.stringArray(forKey: Self.pinnedRepoIDsKey) ?? []
         pinnedRepoIDs = Set(pinnedIDs)
+
+        watcherTask = Task { [weak self] in
+            guard let events = self?.watcher.events else { return }
+            for await event in events {
+                await self?.handle(event)
+            }
+        }
+    }
+
+    isolated deinit {
+        watcherTask?.cancel()
+        watcher.stop()
     }
 
     /// Repos matching `filterText` (name or branch, case-insensitive) that are
@@ -104,6 +124,7 @@ final class AppModel {
     func rescan() async {
         guard !isScanning else { return }
         isScanning = true
+        lastRescanAt = Date()
         defer { isScanning = false }
 
         let roots = trackedFolders
@@ -135,7 +156,32 @@ final class AppModel {
             self.selectedRepoID = nil
         }
 
+        // Re-arm the watcher with the freshly discovered repo set so live
+        // refresh and auto-discovery keep working after every rescan.
+        watcher.setWatched(roots: trackedFolders, repoPaths: repos.map(\.repo.path))
+
         await refreshAllStatuses()
+    }
+
+    /// Handles a debounced watcher event. Runs on the main actor: the
+    /// consumer `Task` in `init` inherits this actor's isolation, so no
+    /// explicit hop is needed here.
+    private func handle(_ event: WatchEvent) async {
+        switch event {
+        case .repoChanged(let url):
+            let target = url.standardizedFileURL.path
+            guard let vm = repos.first(where: { $0.repo.path.standardizedFileURL.path == target }) else {
+                return
+            }
+            await vm.refreshStatus()
+
+        case .possibleNewRepo:
+            guard !isScanning else { return }
+            if let lastRescanAt, Date().timeIntervalSince(lastRescanAt) < Self.rescanStormInterval {
+                return
+            }
+            await rescan()
+        }
     }
 
     private func saveTrackedFolders() {
