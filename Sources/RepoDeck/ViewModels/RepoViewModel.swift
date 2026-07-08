@@ -16,6 +16,10 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Reserved for later action tasks (commit/push/pull); `refreshStatus`
     /// never touches this — refresh is a passive, always-allowed operation.
     var isBusy = false
+    /// Set by a failed stage/unstage/commit/sync action; cleared on the next
+    /// successful action. Task 14 renders this via `ErrorBanner`; until then
+    /// `RepoDetailView` surfaces it directly.
+    var actionError: GitError?
 
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
     /// that arrives mid-refresh is folded into a single trailing refresh
@@ -61,5 +65,39 @@ final class RepoViewModel: @MainActor Identifiable {
             // Stale status beats a blank one; keep whatever we last had.
             statusError = error.localizedDescription
         }
+    }
+
+    /// Stages a single change. For renames/copies, `change.path` (the new
+    /// path) alone is sufficient — `git add -- <newPath>` stages the pair.
+    func stage(_ change: FileChange) async {
+        await performAction { try await client.stage([change.path], in: repo.path) }
+    }
+
+    /// Unstages a single change.
+    func unstage(_ change: FileChange) async {
+        await performAction { try await client.unstage([change.path], in: repo.path) }
+    }
+
+    /// Stages everything, tracked and untracked (`git add -A`).
+    func stageAll() async {
+        await performAction { try await client.stageAll(in: repo.path) }
+    }
+
+    /// Shared shape for every mutating action: skip if already busy, mark
+    /// busy for the duration, record failure in `actionError` (clearing it on
+    /// success), then refresh status regardless of outcome.
+    private func performAction(_ operation: () async throws -> Void) async {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try await operation()
+            actionError = nil
+        } catch let error as GitError {
+            actionError = error
+        } catch {
+            actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
+        }
+        await refreshStatus()
     }
 }

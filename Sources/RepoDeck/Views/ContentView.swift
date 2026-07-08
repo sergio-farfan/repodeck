@@ -63,7 +63,7 @@ struct ContentView: View {
             }
         } else if let selectedRepoID = model.selectedRepoID,
             let selected = model.repos.first(where: { $0.id == selectedRepoID }) {
-            Text(selected.repo.name)
+            RepoDetailView(vm: selected)
         } else {
             ContentUnavailableView(
                 "No Repository Selected",
