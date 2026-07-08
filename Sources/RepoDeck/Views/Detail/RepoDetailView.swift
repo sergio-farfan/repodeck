@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Container for the selected repo's detail pane: an inline error surface
-/// (replaced by `ErrorBanner` in Task 14), the changes list (this task), a
-/// commit box (Task 13), and history (Task 15).
+/// (replaced by `ErrorBanner` in Task 14), a commit box (this task), the
+/// changes list (Task 12), and history (Task 15).
 struct RepoDetailView: View {
     let vm: RepoViewModel
 
@@ -16,6 +16,10 @@ struct RepoDetailView: View {
                     .padding(.top, 6)
             }
 
+            CommitBoxView(vm: vm)
+
+            Divider()
+
             ChangesListView(vm: vm)
 
             Divider()
@@ -27,5 +31,8 @@ struct RepoDetailView: View {
                 .padding(10)
         }
         .navigationTitle(vm.repo.name)
+        .task(id: vm.id) {
+            await vm.refreshLog()
+        }
     }
 }

@@ -13,6 +13,10 @@ final class RepoViewModel: @MainActor Identifiable {
     var status: RepoStatus?
     var statusError: String?
     var isMissing = false
+    /// Draft commit message bound to `CommitBoxView`'s text field.
+    var commitMessage: String = ""
+    /// Populated by `refreshLog()`; rendered by `HistoryList` (Task 15).
+    var commits: [Commit] = []
     /// Reserved for later action tasks (commit/push/pull); `refreshStatus`
     /// never touches this — refresh is a passive, always-allowed operation.
     var isBusy = false
@@ -28,6 +32,9 @@ final class RepoViewModel: @MainActor Identifiable {
     private var refreshQueued = false
 
     var id: String { repo.id }
+
+    /// True when `status` has at least one change staged for commit.
+    var hasStagedChanges: Bool { status?.changes.contains { $0.area == .staged } ?? false }
 
     init(repo: Repo, client: GitClient) {
         self.repo = repo
@@ -81,6 +88,41 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Stages everything, tracked and untracked (`git add -A`).
     func stageAll() async {
         await performAction { try await client.stageAll(in: repo.path) }
+    }
+
+    /// Refreshes `commits` from `git log`. On failure, records `actionError`
+    /// but leaves `commits` untouched — a stale log beats a blank one.
+    func refreshLog() async {
+        do {
+            commits = try await client.log(in: repo.path)
+        } catch let error as GitError {
+            actionError = error
+        } catch {
+            actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
+        }
+    }
+
+    /// Commits currently staged changes with `commitMessage`. No-op unless
+    /// the trimmed message is non-empty, something is staged, and no other
+    /// action is already running. On success, clears the draft message and
+    /// refreshes both status and log so staged changes and the new commit
+    /// show up immediately.
+    func commit() async {
+        let trimmedMessage = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedMessage.isEmpty, hasStagedChanges, !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try await client.commit(message: trimmedMessage, in: repo.path)
+            actionError = nil
+            commitMessage = ""
+            await refreshStatus()
+            await refreshLog()
+        } catch let error as GitError {
+            actionError = error
+        } catch {
+            actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
+        }
     }
 
     /// Shared shape for every mutating action: skip if already busy, mark
