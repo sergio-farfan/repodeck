@@ -17,12 +17,11 @@ final class RepoViewModel: @MainActor Identifiable {
     var commitMessage: String = ""
     /// Populated by `refreshLog()`; rendered by `HistoryList` (Task 15).
     var commits: [Commit] = []
-    /// Reserved for later action tasks (commit/push/pull); `refreshStatus`
+    /// True while a stage/unstage/commit/sync action is running; `refreshStatus`
     /// never touches this — refresh is a passive, always-allowed operation.
     var isBusy = false
     /// Set by a failed stage/unstage/commit/sync action; cleared on the next
-    /// successful action. Task 14 renders this via `ErrorBanner`; until then
-    /// `RepoDetailView` surfaces it directly.
+    /// successful action. Rendered by `ErrorBanner` in `RepoDetailView`.
     var actionError: GitError?
 
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
@@ -125,10 +124,29 @@ final class RepoViewModel: @MainActor Identifiable {
         }
     }
 
+    /// Pulls from upstream, then refreshes status and log — new commits may
+    /// have arrived.
+    func pull() async {
+        await performAction(refreshingLog: true) { try await self.client.pull(in: self.repo.path) }
+    }
+
+    /// Pushes local commits upstream. The log is unchanged by a push, but
+    /// refreshing status anyway picks up the new ahead/behind counts.
+    func push() async {
+        await performAction { try await self.client.push(in: self.repo.path) }
+    }
+
+    /// Fetches from upstream without merging — updates ahead/behind counts.
+    func fetch() async {
+        await performAction { try await self.client.fetch(in: self.repo.path) }
+    }
+
     /// Shared shape for every mutating action: skip if already busy, mark
     /// busy for the duration, record failure in `actionError` (clearing it on
-    /// success), then refresh status regardless of outcome.
-    private func performAction(_ operation: () async throws -> Void) async {
+    /// success), then refresh status regardless of outcome. Sync actions
+    /// (`pull`) additionally refresh the log, since new commits may have
+    /// arrived.
+    private func performAction(refreshingLog: Bool = false, _ operation: () async throws -> Void) async {
         guard !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
@@ -141,5 +159,8 @@ final class RepoViewModel: @MainActor Identifiable {
             actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
         }
         await refreshStatus()
+        if refreshingLog {
+            await refreshLog()
+        }
     }
 }

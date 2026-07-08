@@ -16,6 +16,11 @@ struct ContentView: View {
                 await model.rescan()
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let bulkSummary = model.bulkSummary {
+                bulkSummaryBanner(bulkSummary)
+            }
+        }
         .toolbar {
             ToolbarItemGroup {
                 Button {
@@ -45,8 +50,55 @@ struct ContentView: View {
                     ProgressView()
                         .controlSize(.small)
                 }
+
+                Divider()
+
+                Button {
+                    Task { await model.fetchAll() }
+                } label: {
+                    Label("Fetch All", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(model.bulkProgress != nil || model.isScanning)
+
+                Button {
+                    Task { await model.pullAll() }
+                } label: {
+                    Label("Pull All", systemImage: "arrow.down.circle")
+                }
+                .disabled(model.bulkProgress != nil || model.isScanning)
+
+                if let bulkProgress = model.bulkProgress {
+                    ProgressView(value: Double(bulkProgress.done), total: Double(max(bulkProgress.total, 1))) {
+                        Text("\(bulkProgress.verb) \(bulkProgress.done)/\(bulkProgress.total)")
+                            .font(.caption)
+                    }
+                    .frame(width: 160)
+                }
             }
         }
+    }
+
+    /// Transient, dismissible summary shown after a bulk fetch/pull finishes
+    /// with at least one per-repo failure. The individual failures live in
+    /// each repo's own `actionError`, surfaced by that repo's `ErrorBanner`
+    /// once selected — this is just a toolbar-level count.
+    private func bulkSummaryBanner(_ text: String) -> some View {
+        HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.caption)
+            Spacer()
+            Button {
+                model.bulkSummary = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.15))
     }
 
     @ViewBuilder

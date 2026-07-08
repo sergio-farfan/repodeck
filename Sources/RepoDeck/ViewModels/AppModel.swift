@@ -17,12 +17,29 @@ final class AppModel {
     /// after a rescan already ran (e.g. a multi-step `git clone`).
     private static let rescanStormInterval: TimeInterval = 2
 
+    /// Progress for an in-flight bulk sync (`fetchAll`/`pullAll`).
+    /// `verb` is a present-participle label for the toolbar, e.g. "Fetching".
+    struct BulkProgress: Equatable {
+        var verb: String
+        var done: Int
+        var total: Int
+    }
+
     var trackedFolders: [URL]
     var repos: [RepoViewModel] = []
     var isScanning = false
     var selectedRepoID: String?
     var pinnedRepoIDs: Set<String>
     var filterText: String = ""
+    /// Non-nil while `fetchAll`/`pullAll` is running. Also the reentrancy
+    /// guard: a bulk op only starts when this is nil, so Fetch All and Pull
+    /// All can never overlap, with each other or with themselves.
+    var bulkProgress: BulkProgress?
+    /// Transient failure count from the most recently finished bulk op.
+    /// Per-repo errors live in each repo's own `actionError` (surfaced by
+    /// that repo's `ErrorBanner` once selected); this is just a toolbar-level
+    /// summary the user can dismiss.
+    var bulkSummary: String?
 
     let client = GitClient()
 
@@ -88,6 +105,63 @@ final class AppModel {
                 group.addTask { await vm.refreshStatus() }
             }
         }
+    }
+
+    /// Concurrently fetches every non-missing repo. See `runBulk` for the
+    /// concurrency, guard, and error-reporting discipline shared with `pullAll`.
+    func fetchAll() async {
+        await runBulk(progressVerb: "Fetching", summaryLabel: "Fetch All") { await $0.fetch() }
+    }
+
+    /// Concurrently pulls every non-missing repo. See `runBulk`.
+    func pullAll() async {
+        await runBulk(progressVerb: "Pulling", summaryLabel: "Pull All") { await $0.pull() }
+    }
+
+    /// Shared bulk-op driver for `fetchAll`/`pullAll`.
+    ///
+    /// Guarded by `bulkProgress`: a second call while one is already running
+    /// (from either method) is a no-op, so bulk ops never overlap. Fans one
+    /// `action` per repo out via `withTaskGroup`; `ProcessRunner`'s global
+    /// semaphore — not this loop — bounds real subprocess concurrency, same
+    /// as `refreshAllStatuses`. Each repo's own `performAction` discipline
+    /// records that repo's failure in its own `actionError`; this driver only
+    /// tallies how many repos failed, for the toolbar-level `bulkSummary`.
+    private func runBulk(
+        progressVerb: String,
+        summaryLabel: String,
+        action: @escaping @Sendable (RepoViewModel) async -> Void
+    ) async {
+        guard bulkProgress == nil else { return }
+        let targets = repos.filter { !$0.isMissing }
+        guard !targets.isEmpty else { return }
+
+        bulkSummary = nil
+        bulkProgress = BulkProgress(verb: progressVerb, done: 0, total: targets.count)
+
+        await withTaskGroup(of: Void.self) { group in
+            for vm in targets {
+                group.addTask {
+                    await action(vm)
+                    await self.incrementBulkDone()
+                }
+            }
+        }
+
+        let failureCount = targets.filter { $0.actionError != nil }.count
+        if failureCount > 0 {
+            bulkSummary = "\(summaryLabel): \(failureCount) of \(targets.count) failed — select a repo to see its error"
+        }
+        bulkProgress = nil
+    }
+
+    /// Increments `bulkProgress.done` on the main actor as each repo's bulk
+    /// action completes. A dedicated method (rather than mutating the
+    /// property directly from inside a task-group child task) keeps the hop
+    /// onto the main actor explicit, mirroring how every cross-actor call in
+    /// this file goes through an isolated method.
+    private func incrementBulkDone() {
+        bulkProgress?.done += 1
     }
 
     /// Presents an `NSOpenPanel` for choosing one or more folders, appends any
