@@ -155,4 +155,23 @@ import Testing
             #expect(commit.subject == "feat: add file with spaces")
         }
     }
+
+    // MARK: 8. Truncated status output is a partial parse, not a thrown error
+
+    @Test func truncatedStatusOutputDoesNotThrowAndReportsPartialResults() async throws {
+        try await withTempRepo { repo, _ in
+            for i in 0..<20 {
+                let name = "untracked-file-with-a-reasonably-long-name-\(i).txt"
+                try "content".write(to: repo.appendingPathComponent(name), atomically: true, encoding: .utf8)
+            }
+
+            var client = GitClient()
+            client.statusOutputLimit = 64
+
+            let status = try await client.status(in: repo)
+            #expect(status.didHitLimit == true)
+            #expect(status.changes.count >= 1)
+            #expect(status.changes.count < 20)
+        }
+    }
 }

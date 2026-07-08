@@ -7,6 +7,11 @@ import Foundation
 public struct GitClient: Sendable {
     public var gitPath: String
 
+    /// Output cap (bytes) passed to `status`'s `ProcessRunner.run` call.
+    /// Public so tests can shrink it to exercise the truncation path without
+    /// generating megabytes of fixture data.
+    public var statusOutputLimit: Int = 4_000_000
+
     public init(gitPath: String = GitDefaults.gitPath) {
         self.gitPath = gitPath
     }
@@ -14,14 +19,15 @@ public struct GitClient: Sendable {
     /// `git -C <repo> status --porcelain=v2 --branch --untracked-files=all -z`
     ///
     /// Runs with `GIT_OPTIONAL_LOCKS=0` (never blocks on another git process
-    /// holding the index lock) and a 4 MB output cap; a truncated read is
-    /// passed through to `PorcelainParser` rather than treated as failure.
+    /// holding the index lock) and a `statusOutputLimit`-byte output cap; a
+    /// truncated read is passed through to `PorcelainParser` rather than
+    /// treated as failure.
     public func status(in repo: URL) async throws -> RepoStatus {
         let result = try await run(
             ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"],
             in: repo,
             environment: ["GIT_OPTIONAL_LOCKS": "0"],
-            maxOutputBytes: 4_000_000
+            maxOutputBytes: statusOutputLimit
         )
         return PorcelainParser.parse(result.stdout, truncated: result.outputTruncated)
     }
@@ -100,7 +106,12 @@ public struct GitClient: Sendable {
             environment: environment,
             maxOutputBytes: maxOutputBytes
         )
-        guard result.exitCode == 0 else {
+        // `ProcessRunner` enforces `maxOutputBytes` by SIGTERM-ing the child,
+        // which makes `terminationStatus` a nonzero signal exit (15) rather
+        // than 0 — that is expected, not a failure. Only `status` passes
+        // `maxOutputBytes`, so this can't mask a real failure of any other
+        // command.
+        guard result.exitCode == 0 || result.outputTruncated else {
             throw GitError(
                 command: commandString(fullArguments),
                 exitCode: result.exitCode,

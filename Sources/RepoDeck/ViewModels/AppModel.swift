@@ -48,9 +48,14 @@ final class AppModel {
     private var lastRescanAt: Date?
     /// Set when a `.possibleNewRepo` event arrives while a rescan is already
     /// running or inside the storm-guard window, instead of dropping the
-    /// event on the floor. Consumed at the end of `rescan()`, which schedules
-    /// exactly one follow-up rescan so the event isn't lost.
+    /// event on the floor. Consumed by the follow-up `Task` scheduled by
+    /// `scheduleFollowUpRescan()`, which calls `rescan()` again so the event
+    /// isn't lost.
     private var pendingRescan = false
+    /// Guards `scheduleFollowUpRescan()` so at most one follow-up `Task` is
+    /// ever in flight, whether it was scheduled from `rescan()`'s tail or
+    /// from the storm-window branch of `handle(_:)`.
+    private var isFollowUpScheduled = false
 
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
@@ -243,17 +248,30 @@ final class AppModel {
 
         // A `.possibleNewRepo` event landed while this rescan owned the
         // guard (either `isScanning` or the storm window) and was recorded
-        // rather than dropped. Consume it and schedule exactly one follow-up
-        // rescan, after a short delay so it still respects the storm guard.
-        // `isScanning` is re-checked after the delay in case another rescan
-        // (e.g. user-triggered) started in the meantime.
+        // rather than dropped. Schedule exactly one follow-up rescan so it
+        // isn't lost.
         if pendingRescan {
-            pendingRescan = false
-            Task {
-                try? await Task.sleep(for: .seconds(Self.rescanStormInterval))
-                guard !self.isScanning else { return }
-                await self.rescan()
-            }
+            scheduleFollowUpRescan()
+        }
+    }
+
+    /// Schedules the single follow-up rescan that consumes `pendingRescan`.
+    ///
+    /// Called both from `rescan()`'s tail and from the storm-window branch of
+    /// `handle(_:)` — factored here so the "sleep, recheck, consume, rescan"
+    /// logic exists exactly once. `isFollowUpScheduled` guards against
+    /// stacking multiple concurrent follow-ups; it is cleared before
+    /// `rescan()` runs so a `pendingRescan` set during that call schedules a
+    /// fresh follow-up rather than being silently absorbed.
+    private func scheduleFollowUpRescan() {
+        guard !isFollowUpScheduled else { return }
+        isFollowUpScheduled = true
+        Task {
+            try? await Task.sleep(for: .seconds(Self.rescanStormInterval))
+            self.isFollowUpScheduled = false
+            guard !self.isScanning, self.pendingRescan else { return }
+            self.pendingRescan = false
+            await self.rescan()
         }
     }
 
@@ -271,14 +289,19 @@ final class AppModel {
 
         case .possibleNewRepo:
             // Rather than dropping an event that arrives while a rescan
-            // already owns the guard, remember it so `rescan()` can follow up
-            // once it's done — see `pendingRescan`.
+            // already owns the guard, remember it so a follow-up rescan can
+            // pick it up once the guard clears — see `pendingRescan`. A
+            // rescan already in flight will consume the flag itself via its
+            // tail; the storm-window case below has no in-flight rescan to
+            // do that, so it must schedule the follow-up itself or the flag
+            // would never be consumed.
             guard !isScanning else {
                 pendingRescan = true
                 return
             }
             if let lastRescanAt, Date().timeIntervalSince(lastRescanAt) < Self.rescanStormInterval {
                 pendingRescan = true
+                scheduleFollowUpRescan()
                 return
             }
             await rescan()
