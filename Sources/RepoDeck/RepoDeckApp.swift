@@ -10,6 +10,14 @@ struct RepoDeckApp: App {
             ContentView()
                 .environment(model)
         }
+        .commands {
+            CommandGroup(after: .toolbar) {
+                Button("Refresh Repositories") {
+                    Task { await model.rescan() }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+            }
+        }
     }
 }
 

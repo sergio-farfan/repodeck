@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -15,6 +16,15 @@ struct ContentView: View {
             if !model.trackedFolders.isEmpty && model.repos.isEmpty {
                 await model.rescan()
             }
+        }
+        // FSEvents backstop: if a watcher event was missed (e.g. the Mac was
+        // asleep, or the change happened while RepoDeck wasn't running),
+        // refresh statuses when the app regains focus. Statuses only — not a
+        // full rescan — and skipped while a scan or bulk op already owns the
+        // repo list/state, so this never races `rescan()`/`fetchAll()`/`pullAll()`.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard !model.isScanning, model.bulkProgress == nil else { return }
+            Task { await model.refreshAllStatuses() }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if let bulkSummary = model.bulkSummary {
@@ -113,7 +123,20 @@ struct ContentView: View {
                     model.addFolders()
                 }
             }
+        } else if model.repos.isEmpty && !model.isScanning {
+            // Folders are tracked but the most recent completed scan found no
+            // git repos in any of them. Gated on !isScanning so this doesn't
+            // flash during the initial scan kicked off by `.task` above.
+            ContentUnavailableView(
+                "No Repositories Found",
+                systemImage: "folder.badge.questionmark",
+                description: Text("None of the tracked folders contain a git repository. Add a folder that does, or clone one into an existing tracked folder.")
+            )
         } else if let selectedRepoID = model.selectedRepoID,
+            // Defensive: `selectedRepoID` can point at a repo that just
+            // disappeared (rescan pruned it, or `removeRepo` dropped it).
+            // `first(where:)` returns nil rather than crashing, and we fall
+            // through to the "no selection" state below.
             let selected = model.repos.first(where: { $0.id == selectedRepoID }) {
             RepoDetailView(vm: selected)
         } else {

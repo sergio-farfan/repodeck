@@ -46,6 +46,11 @@ final class AppModel {
     private let watcher = RepoWatcher()
     private var watcherTask: Task<Void, Never>?
     private var lastRescanAt: Date?
+    /// Set when a `.possibleNewRepo` event arrives while a rescan is already
+    /// running or inside the storm-guard window, instead of dropping the
+    /// event on the floor. Consumed at the end of `rescan()`, which schedules
+    /// exactly one follow-up rescan so the event isn't lost.
+    private var pendingRescan = false
 
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
@@ -235,6 +240,21 @@ final class AppModel {
         watcher.setWatched(roots: trackedFolders, repoPaths: repos.map(\.repo.path))
 
         await refreshAllStatuses()
+
+        // A `.possibleNewRepo` event landed while this rescan owned the
+        // guard (either `isScanning` or the storm window) and was recorded
+        // rather than dropped. Consume it and schedule exactly one follow-up
+        // rescan, after a short delay so it still respects the storm guard.
+        // `isScanning` is re-checked after the delay in case another rescan
+        // (e.g. user-triggered) started in the meantime.
+        if pendingRescan {
+            pendingRescan = false
+            Task {
+                try? await Task.sleep(for: .seconds(Self.rescanStormInterval))
+                guard !self.isScanning else { return }
+                await self.rescan()
+            }
+        }
     }
 
     /// Handles a debounced watcher event. Runs on the main actor: the
@@ -250,8 +270,15 @@ final class AppModel {
             await vm.refreshStatus()
 
         case .possibleNewRepo:
-            guard !isScanning else { return }
+            // Rather than dropping an event that arrives while a rescan
+            // already owns the guard, remember it so `rescan()` can follow up
+            // once it's done — see `pendingRescan`.
+            guard !isScanning else {
+                pendingRescan = true
+                return
+            }
             if let lastRescanAt, Date().timeIntervalSince(lastRescanAt) < Self.rescanStormInterval {
+                pendingRescan = true
                 return
             }
             await rescan()
