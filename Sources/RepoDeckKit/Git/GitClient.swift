@@ -36,18 +36,37 @@ public struct GitClient: Sendable {
     ///
     /// Special case: a brand-new repo with no commits yet exits 128 with
     /// stderr containing "does not have any commits" — that is not an error
-    /// condition for us, it just means an empty history.
+    /// condition for us, it just means an empty history. See `runLogCommand`.
     public func log(in repo: URL, limit: Int = 100) async throws -> [Commit] {
-        let format = "%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%D%x1e"
-        do {
-            let result = try await run(["log", "-n", "\(limit)", "--pretty=format:\(format)"], in: repo)
-            return LogParser.parse(String(decoding: result.stdout, as: UTF8.self))
-        } catch let error as GitError {
-            if error.exitCode == 128, error.stderr.contains("does not have any commits") {
-                return []
+        try await runLogCommand(["log", "-n", "\(limit)", "--pretty=format:\(Self.logFormat)"], in: repo)
+    }
+
+    /// `git -C <repo> log -n <limit> --pretty=format:<same format as `log`>`
+    /// plus, by `query.field`:
+    /// - `.message` → `--grep=<text> -i`
+    /// - `.author` → `--author=<text> -i`
+    /// - `.content` → `-G<text>` (pickaxe: commits that add/remove a line matching `text`)
+    /// - `.path` → `-- <text>` (pathspec, always LAST in argv)
+    ///
+    /// `query.text` is trimmed; if empty after trimming, no filter is added
+    /// and this behaves exactly like `log` (full recent log). Shares the
+    /// exit-128 empty-repo handling with `log` via `runLogCommand`.
+    public func searchLog(_ query: HistorySearchQuery, in repo: URL, limit: Int = 100) async throws -> [Commit] {
+        var arguments = ["log", "-n", "\(limit)", "--pretty=format:\(Self.logFormat)"]
+        let text = query.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty {
+            switch query.field {
+            case .message:
+                arguments += ["--grep=\(text)", "-i"]
+            case .author:
+                arguments += ["--author=\(text)", "-i"]
+            case .content:
+                arguments += ["-G\(text)"]
+            case .path:
+                arguments += ["--", text]
             }
-            throw error
         }
+        return try await runLogCommand(arguments, in: repo)
     }
 
     /// `git -C <repo> add -- <paths>` (also stages deletions of tracked files).
@@ -90,6 +109,29 @@ public struct GitClient: Sendable {
     }
 
     // MARK: - Private helpers
+
+    /// Pretty-format shared by `log` and `searchLog`, kept in exactly one
+    /// place so both stay in lockstep with `LogParser`'s field layout.
+    private static let logFormat = "%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%D%x1e"
+
+    /// Runs a `git log`-shaped `arguments` list and parses the shared
+    /// pretty-format output with `LogParser`.
+    ///
+    /// Special case, shared by `log` and `searchLog`: a brand-new repo (or a
+    /// search that matches nothing on a fresh repo) with no commits yet
+    /// exits 128 with stderr containing "does not have any commits" — that
+    /// is not an error condition for us, it just means an empty history.
+    private func runLogCommand(_ arguments: [String], in repo: URL) async throws -> [Commit] {
+        do {
+            let result = try await run(arguments, in: repo)
+            return LogParser.parse(String(decoding: result.stdout, as: UTF8.self))
+        } catch let error as GitError {
+            if error.exitCode == 128, error.stderr.contains("does not have any commits") {
+                return []
+            }
+            throw error
+        }
+    }
 
     /// Runs `git -C <repo> <arguments>` and throws `GitError` on any non-zero
     /// exit, carrying the full command string and stderr verbatim.

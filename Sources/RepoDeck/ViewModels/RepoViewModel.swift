@@ -17,6 +17,12 @@ final class RepoViewModel: @MainActor Identifiable {
     var commitMessage: String = ""
     /// Populated by `refreshLog()`; rendered by `HistoryListView`.
     var commits: [Commit] = []
+    /// Free-text history search bound to `HistoryListView`'s search field.
+    /// Trimmed empty (the default) means "no filter" — `refreshLog()` falls
+    /// back to the full `client.log(in:)`.
+    var historyQuery: String = ""
+    /// Which axis `historyQuery` is matched against.
+    var historyField: HistorySearchField = .message
     /// True while a stage/unstage/commit/sync action is running; `refreshStatus`
     /// never touches this — refresh is a passive, always-allowed operation.
     var isBusy = false
@@ -29,6 +35,11 @@ final class RepoViewModel: @MainActor Identifiable {
     /// instead of piling up concurrent invocations.
     private var refreshInFlight = false
     private var refreshQueued = false
+
+    /// The in-flight debounced search reschedule, if any. Cancelled and
+    /// replaced by every call to `scheduleHistorySearch()`, so only the
+    /// most recent keystroke's search actually runs.
+    private var historySearchTask: Task<Void, Never>?
 
     var id: String { repo.id }
 
@@ -89,15 +100,42 @@ final class RepoViewModel: @MainActor Identifiable {
         await performAction { try await client.stageAll(in: repo.path) }
     }
 
-    /// Refreshes `commits` from `git log`. On failure, records `actionError`
-    /// but leaves `commits` untouched — a stale log beats a blank one.
+    /// Refreshes `commits` from `git log`, or `git log`'s search-filtered
+    /// equivalent when `historyQuery` (trimmed) is non-empty. On failure,
+    /// records `actionError` but leaves `commits` untouched — a stale log
+    /// beats a blank one. If the enclosing `Task` was cancelled (e.g. a
+    /// debounced search superseded by a newer keystroke, or a killed git
+    /// subprocess surfacing as a `GitError`), the failure is dropped instead
+    /// of clobbering `actionError` with a stale/spurious error.
     func refreshLog() async {
         do {
-            commits = try await client.log(in: repo.path)
+            let trimmedQuery = historyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedQuery.isEmpty {
+                commits = try await client.log(in: repo.path)
+            } else {
+                let query = HistorySearchQuery(text: trimmedQuery, field: historyField)
+                commits = try await client.searchLog(query, in: repo.path)
+            }
         } catch let error as GitError {
+            guard !Task.isCancelled else { return }
             actionError = error
         } catch {
+            guard !Task.isCancelled else { return }
             actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
+        }
+    }
+
+    /// Debounces `historyQuery` edits: cancels any prior pending search,
+    /// waits 300ms, then runs `refreshLog()` — unless a newer keystroke
+    /// cancelled this task first. A cancelled search must never clobber
+    /// `actionError` or `commits` with a stale result, so cancellation is
+    /// checked both before and after the sleep.
+    func scheduleHistorySearch() {
+        historySearchTask?.cancel()
+        historySearchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard !Task.isCancelled else { return }
+            await self?.refreshLog()
         }
     }
 
