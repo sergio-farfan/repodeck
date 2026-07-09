@@ -11,6 +11,9 @@ Native macOS dashboard for the git status of all your local repositories.
 - Stage, commit, pull, push, fetch
 - Bulk Fetch All / Pull All
 - Sidebar filter + pinning
+- History search by message, author, file path, or content (pickaxe)
+- Resizable Changes/History split
+- Themes (System/Light/Dark), custom accent color, fonts, and font size (⌘,)
 
 ## Requirements
 
@@ -29,7 +32,7 @@ Scripts/bundle.sh --open
 
 ## Status
 
-v1 in development.
+v1.1.
 
 ## License
 
