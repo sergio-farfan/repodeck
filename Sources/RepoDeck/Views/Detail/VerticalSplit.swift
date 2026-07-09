@@ -104,6 +104,20 @@ private struct SplitHandle: View {
                     syncCursor()
                 }
         )
+        .onDisappear {
+            // If the detail pane is torn down while the handle is hovered or
+            // mid-drag (selection removed by a background rescan, last folder
+            // removed), onHover(false)/onEnded never fire. NSCursor's stack is
+            // process-wide, so an unbalanced push would corrupt the cursor for
+            // the rest of the session — pop it here and reset drag state.
+            isHovering = false
+            isDragging = false
+            dragStartFraction = nil
+            if cursorPushed {
+                NSCursor.pop()
+                cursorPushed = false
+            }
+        }
     }
 
     /// Keeps `NSCursor.push()`/`.pop()` in 1:1 balance: pushes once when
