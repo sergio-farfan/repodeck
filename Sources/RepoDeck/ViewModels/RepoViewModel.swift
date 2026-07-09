@@ -36,10 +36,19 @@ final class RepoViewModel: @MainActor Identifiable {
     private var refreshInFlight = false
     private var refreshQueued = false
 
-    /// The in-flight debounced search reschedule, if any. Cancelled and
-    /// replaced by every call to `scheduleHistorySearch()`, so only the
-    /// most recent keystroke's search actually runs.
+    /// The in-flight debounced/immediate search reschedule, if any.
+    /// Cancelled and replaced by every call to `scheduleHistorySearch()` or
+    /// `historyFieldChanged()`, so only the most recently requested search
+    /// actually runs through this slot.
     private var historySearchTask: Task<Void, Never>?
+
+    /// Monotonic counter bumped at the entry of every `refreshLog()` call.
+    /// Each call captures its own value and re-checks it after every await,
+    /// so a slower, older refresh can never overwrite a newer one's result
+    /// — see `refreshLog()` for the full guarantee. This is what actually
+    /// prevents clobbering; `historySearchTask` cancellation is a secondary,
+    /// best-effort measure (it can't stop an already-running git subprocess).
+    private var historyGeneration = 0
 
     var id: String { repo.id }
 
@@ -103,38 +112,74 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Refreshes `commits` from `git log`, or `git log`'s search-filtered
     /// equivalent when `historyQuery` (trimmed) is non-empty. On failure,
     /// records `actionError` but leaves `commits` untouched — a stale log
-    /// beats a blank one. If the enclosing `Task` was cancelled (e.g. a
-    /// debounced search superseded by a newer keystroke, or a killed git
-    /// subprocess surfacing as a `GitError`), the failure is dropped instead
-    /// of clobbering `actionError` with a stale/spurious error.
+    /// beats a blank one.
+    ///
+    /// This is called from several places that can race each other — the
+    /// debounced search (`scheduleHistorySearch()`), the immediate
+    /// scope-change refresh (`historyFieldChanged()`), the initial
+    /// `.task(id:)` load, and the post-commit/post-pull refreshes in
+    /// `commit()`/`performAction()`. `ProcessRunner` cancellation only
+    /// SIGTERMs the child process; if it exits 0 before noticing the
+    /// signal, a cancelled call still returns a normal, but stale, result.
+    /// So every call captures `historyGeneration` at entry and, after the
+    /// single await that produces its result, re-checks that it is still
+    /// the current generation (and not cancelled) before touching `commits`
+    /// or `actionError`. Whichever request is newest when its await
+    /// resolves wins; an older, slower one is silently dropped no matter
+    /// which one's git process happens to finish last.
     func refreshLog() async {
+        historyGeneration += 1
+        let generation = historyGeneration
         do {
             let trimmedQuery = historyQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            let result: [Commit]
             if trimmedQuery.isEmpty {
-                commits = try await client.log(in: repo.path)
+                result = try await client.log(in: repo.path)
             } else {
                 let query = HistorySearchQuery(text: trimmedQuery, field: historyField)
-                commits = try await client.searchLog(query, in: repo.path)
+                result = try await client.searchLog(query, in: repo.path)
             }
+            guard generation == historyGeneration, !Task.isCancelled else { return }
+            commits = result
         } catch let error as GitError {
-            guard !Task.isCancelled else { return }
+            guard generation == historyGeneration, !Task.isCancelled else { return }
             actionError = error
         } catch {
-            guard !Task.isCancelled else { return }
+            guard generation == historyGeneration, !Task.isCancelled else { return }
             actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
         }
     }
 
-    /// Debounces `historyQuery` edits: cancels any prior pending search,
-    /// waits 300ms, then runs `refreshLog()` — unless a newer keystroke
-    /// cancelled this task first. A cancelled search must never clobber
-    /// `actionError` or `commits` with a stale result, so cancellation is
-    /// checked both before and after the sleep.
+    /// Debounces `historyQuery` edits: cancels any prior pending search in
+    /// the shared `historySearchTask` slot, waits 300ms, then runs
+    /// `refreshLog()` — unless a newer keystroke or field change cancelled
+    /// this task first (checked before the sleep and again after it).
+    /// That cancellation is only a best-effort short-circuit: it stops this
+    /// `Task` from ever calling `refreshLog()`, but it cannot stop a git
+    /// subprocess that is already running. The actual guarantee against a
+    /// stale result clobbering a newer one is `refreshLog()`'s generation
+    /// counter (`historyGeneration`), which both this method and
+    /// `historyFieldChanged()` funnel through — see `refreshLog()` for how
+    /// that guard works.
     func scheduleHistorySearch() {
         historySearchTask?.cancel()
         historySearchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
+            await self?.refreshLog()
+        }
+    }
+
+    /// Immediately reschedules `refreshLog()` for a `historyField` (scope)
+    /// change: cancels any pending/in-flight search in the same
+    /// `historySearchTask` slot used by `scheduleHistorySearch()` — so a
+    /// slow content-scope search and a fast field-change search are never
+    /// both left running untracked — then runs the refresh with no debounce
+    /// delay. `refreshLog()`'s generation counter is the final backstop if
+    /// the cancelled task's git subprocess still completes.
+    func historyFieldChanged() {
+        historySearchTask?.cancel()
+        historySearchTask = Task { [weak self] in
             await self?.refreshLog()
         }
     }

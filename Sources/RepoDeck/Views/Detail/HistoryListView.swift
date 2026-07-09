@@ -52,16 +52,15 @@ struct HistoryListView: View {
                 }
 
             Picker("Search field", selection: $vm.historyField) {
-                Text("Message").tag(HistorySearchField.message)
-                Text("Author").tag(HistorySearchField.author)
-                Text("File").tag(HistorySearchField.path)
-                Text("Content").tag(HistorySearchField.content)
+                ForEach(HistorySearchField.allCases, id: \.self) { field in
+                    Text(field.displayName).tag(field)
+                }
             }
             .labelsHidden()
             .font(theme.callout)
             .fixedSize()
             .onChange(of: vm.historyField) {
-                Task { await vm.refreshLog() }
+                vm.historyFieldChanged()
             }
         }
         .padding(.horizontal, 10)
@@ -76,5 +75,19 @@ struct HistoryListView: View {
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
+    }
+}
+
+private extension HistorySearchField {
+    /// Label for the scope picker. Kept local to this view since
+    /// `.path`'s label ("File") doesn't fall out of a capitalized
+    /// `rawValue`, so it can't be derived automatically.
+    var displayName: String {
+        switch self {
+        case .message: "Message"
+        case .author: "Author"
+        case .path: "File"
+        case .content: "Content"
+        }
     }
 }
