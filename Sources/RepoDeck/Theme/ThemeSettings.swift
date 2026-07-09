@@ -118,7 +118,10 @@ final class ThemeSettings {
     var accentColor: Color {
         get { accent }
         set {
-            let nsColor = NSColor(newValue).usingColorSpace(.sRGB) ?? NSColor(newValue)
+            // Only sRGB-convertible colors expose RGBA component accessors;
+            // reading them off a pattern/Crayons color raises an uncatchable
+            // NSException. If the conversion fails, keep the current accent.
+            guard let nsColor = NSColor(newValue).usingColorSpace(.sRGB) else { return }
             accentHex = ColorHex.encode(
                 red: Double(nsColor.redComponent),
                 green: Double(nsColor.greenComponent),
