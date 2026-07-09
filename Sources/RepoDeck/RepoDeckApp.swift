@@ -5,11 +5,16 @@ import SwiftUI
 struct RepoDeckApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
+    @State private var theme = ThemeSettings()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(model)
+                .environment(theme)
+                .environment(\.theme, Theme(settings: theme))
+                .preferredColorScheme(theme.appearance.colorScheme)
+                .tint(theme.accent)
         }
         .commands {
             CommandGroup(after: .toolbar) {
@@ -18,6 +23,13 @@ struct RepoDeckApp: App {
                 }
                 .keyboardShortcut("r", modifiers: .command)
             }
+        }
+
+        // Auto-adds the ⌘, "Settings…" menu item.
+        Settings {
+            SettingsView()
+                .environment(theme)
+                .environment(\.theme, Theme(settings: theme))
         }
     }
 }
