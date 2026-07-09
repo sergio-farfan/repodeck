@@ -3,7 +3,6 @@ I have somewhere around thirty git repositories checked out on my Mac at any giv
 So I built **RepoDeck** — a native macOS dashboard that tracks a set of folders, recursively finds every git repository underneath them, and shows you at a glance which ones need attention.
 
 ![RepoDeck dashboard](https://raw.githubusercontent.com/sergio-farfan/repodeck/648ec69/docs/screenshot.png)
-<!-- docs/screenshot.png is committed; this raw URL still 404s for readers until the repo is public — attach the image directly on dev.to at publish time. -->
 
 ---
 

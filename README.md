@@ -2,10 +2,8 @@
   <img src="https://img.shields.io/badge/macOS-15%2B-000000?style=flat-square&logo=apple&logoColor=white" alt="macOS 15+">
   <img src="https://img.shields.io/badge/swift-6.1%2B-F05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.1+">
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License">
-  <!-- Once this repo is public, add:
   <img src="https://img.shields.io/github/v/release/sergio-farfan/repodeck?style=flat-square&label=version" alt="Version">
   <img src="https://img.shields.io/github/downloads/sergio-farfan/repodeck/total?style=flat-square&label=downloads" alt="Downloads">
-  -->
 </p>
 
 # RepoDeck
