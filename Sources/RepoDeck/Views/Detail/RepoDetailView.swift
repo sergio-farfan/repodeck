@@ -6,6 +6,11 @@ import SwiftUI
 struct RepoDetailView: View {
     let vm: RepoViewModel
 
+    /// Fraction of the Changes/History region given to Changes. A single
+    /// global value (not per-repo); `RepoDetailView` is a plain `View`, so
+    /// `@AppStorage` works here (unlike in the `@Observable` view models).
+    @AppStorage("detail.changesFraction") private var changesFraction: Double = 0.5
+
     var body: some View {
         @Bindable var vm = vm
 
@@ -18,11 +23,11 @@ struct RepoDetailView: View {
 
             Divider()
 
-            ChangesListView(vm: vm)
-
-            Divider()
-
-            HistoryListView(vm: vm)
+            VerticalSplit(fraction: $changesFraction) {
+                ChangesListView(vm: vm)
+            } bottom: {
+                HistoryListView(vm: vm)
+            }
         }
         .navigationTitle(vm.repo.name)
         .task(id: vm.id) {
