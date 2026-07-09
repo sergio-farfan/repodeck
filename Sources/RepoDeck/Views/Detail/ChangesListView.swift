@@ -5,6 +5,7 @@ import SwiftUI
 /// unstaged, and untracked, each section shown only when non-empty. Per-file
 /// actions and "Stage All" delegate to `RepoViewModel`.
 struct ChangesListView: View {
+    @Environment(\.theme) private var theme
     let vm: RepoViewModel
 
     var body: some View {
@@ -78,7 +79,7 @@ struct ChangesListView: View {
 
     private var truncationNotice: some View {
         Label("Too many changes — showing a partial list.", systemImage: "exclamationmark.triangle.fill")
-            .font(.caption)
+            .font(theme.caption)
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(Color.yellow.opacity(0.3), in: Capsule())

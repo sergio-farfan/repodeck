@@ -5,6 +5,7 @@ import SwiftUI
 /// `RepoViewModel.refreshLog()`). Deliberate v1 scope: no graph, no
 /// pagination — the 100-commit log limit from `GitClient` is enough.
 struct HistoryListView: View {
+    @Environment(\.theme) private var theme
     let vm: RepoViewModel
 
     var body: some View {
@@ -13,7 +14,7 @@ struct HistoryListView: View {
 
             if vm.commits.isEmpty {
                 Text("No commits yet")
-                    .font(.callout)
+                    .font(theme.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
@@ -28,7 +29,7 @@ struct HistoryListView: View {
 
     private var header: some View {
         Text("History (\(vm.commits.count))")
-            .font(.headline)
+            .font(theme.title)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)

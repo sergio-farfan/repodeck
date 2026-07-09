@@ -4,6 +4,7 @@ import SwiftUI
 /// Commit button, mounted at the top of `RepoDetailView`. Cmd-Enter commits
 /// while the message field has focus.
 struct CommitBoxView: View {
+    @Environment(\.theme) private var theme
     let vm: RepoViewModel
 
     var body: some View {
@@ -11,6 +12,7 @@ struct CommitBoxView: View {
 
         VStack(alignment: .leading, spacing: 6) {
             TextField("Message (⌘⏎ to commit)", text: $vm.commitMessage, axis: .vertical)
+                .font(theme.body)
                 .lineLimit(1...5)
                 .textFieldStyle(.roundedBorder)
 
@@ -33,7 +35,7 @@ struct CommitBoxView: View {
 
             if showsNoStagedChangesCaption {
                 Text("No staged changes")
-                    .font(.caption)
+                    .font(theme.caption)
                     .foregroundStyle(.secondary)
             }
         }

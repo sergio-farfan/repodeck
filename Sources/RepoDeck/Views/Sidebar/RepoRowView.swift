@@ -4,6 +4,7 @@ import SwiftUI
 
 struct RepoRowView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.theme) private var theme
     let vm: RepoViewModel
 
     var body: some View {
@@ -14,6 +15,7 @@ struct RepoRowView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(vm.repo.name)
+                    .font(theme.body)
 
                 if let branch = vm.status?.branch {
                     HStack(spacing: 4) {
@@ -26,7 +28,7 @@ struct RepoRowView: View {
                                 .help("Uncommitted changes on \(branch)")
                         }
                     }
-                    .font(.caption)
+                    .font(theme.caption)
                     .foregroundStyle(.secondary)
                 }
             }
@@ -35,7 +37,7 @@ struct RepoRowView: View {
 
             if let aheadBehindText {
                 Text(aheadBehindText)
-                    .font(.caption)
+                    .font(theme.caption)
                     .foregroundStyle(.secondary)
             }
         }

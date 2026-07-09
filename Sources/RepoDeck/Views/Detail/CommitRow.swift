@@ -6,6 +6,7 @@ import SwiftUI
 /// secondary line with author, relative date, and monospaced short hash.
 /// Context menu copies the full hash or the subject to the pasteboard.
 struct CommitRow: View {
+    @Environment(\.theme) private var theme
     let commit: Commit
 
     /// Ref capsules beyond this count collapse into a single "+N" overflow
@@ -16,7 +17,7 @@ struct CommitRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text(commit.subject)
-                    .font(.body)
+                    .font(theme.body)
                     .lineLimit(1)
                     .layoutPriority(1)
 
@@ -32,9 +33,9 @@ struct CommitRow: View {
                 Text(commit.date, format: .relative(presentation: .named))
                 Spacer(minLength: 4)
                 Text(commit.shortHash)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(theme.mono(11))
             }
-            .font(.caption)
+            .font(theme.caption)
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
@@ -101,12 +102,13 @@ struct CommitRow: View {
 /// Small tinted capsule for a single ref/tag label, `.caption2` sized to
 /// match VS Code's graph-panel density.
 private struct RefCapsule: View {
+    @Environment(\.theme) private var theme
     let label: String
     let color: Color
 
     var body: some View {
         Text(label)
-            .font(.caption2)
+            .font(theme.caption2)
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)

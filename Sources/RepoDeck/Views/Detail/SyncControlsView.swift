@@ -3,6 +3,7 @@ import SwiftUI
 /// Horizontal pull/push/fetch bar mounted under the commit box, plus an
 /// ahead/behind readout for the current upstream.
 struct SyncControlsView: View {
+    @Environment(\.theme) private var theme
     let vm: RepoViewModel
 
     var body: some View {
@@ -38,9 +39,10 @@ struct SyncControlsView: View {
             VStack(alignment: .trailing, spacing: 2) {
                 if let aheadBehindText {
                     Text(aheadBehindText)
+                        .font(theme.caption)
                 }
                 Text(vm.status?.upstream ?? "No upstream")
-                    .font(.caption)
+                    .font(theme.caption)
                     .foregroundStyle(.secondary)
             }
         }

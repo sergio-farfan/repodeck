@@ -25,6 +25,7 @@ struct FileChangeRow: View {
         }
     }
 
+    @Environment(\.theme) private var theme
     let change: FileChange
     let vm: RepoViewModel
     let action: Action?
@@ -35,11 +36,12 @@ struct FileChangeRow: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(fileName)
+                    .font(theme.body)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let dimmedText {
                     Text(dimmedText)
-                        .font(.caption2)
+                        .font(theme.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
