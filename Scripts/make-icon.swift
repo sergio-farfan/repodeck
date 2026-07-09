@@ -132,16 +132,19 @@ func drawCommitGraph(_ ctx: CGContext, in rect: CGRect, lineWidth: CGFloat, node
     let topY = rect.midY + spanHeight / 2
     let bottomY = rect.midY - spanHeight / 2
 
-    // Four evenly spaced nodes along the main line.
+    // Nodes along the main line: the branch-point/merge-point pair gets a
+    // wider gap than the end segments so the branch has room for a visible
+    // parallel lane (an even 1/3 split left only ~one line-width of straight
+    // run, which rendered as a pinched "▷" instead of a git lane).
     let topNodeY = topY
-    let branchPointY = topY - spanHeight * (1.0 / 3.0)
-    let mergePointY = topY - spanHeight * (2.0 / 3.0)
+    let branchPointY = topY - spanHeight * 0.24
+    let mergePointY = topY - spanHeight * 0.76
     let bottomNodeY = bottomY
 
     // The diverge/merge curves end in a short vertical run so the branch
     // line is parallel to the main line for a stretch (where its node sits).
     let gap = branchPointY - mergePointY
-    let curveReach = gap * 0.35
+    let curveReach = gap * 0.24
     let curveEndTop = branchPointY - curveReach
     let curveEndBottom = mergePointY + curveReach
     let branchNodeY = (branchPointY + mergePointY) / 2
