@@ -141,6 +141,14 @@ final class RepoViewModel: @MainActor Identifiable {
             }
             guard generation == historyGeneration, !Task.isCancelled else { return }
             commits = result
+            // A keystroke-driven search can fail transiently (e.g. an
+            // unmatched "[" mid-typing makes --grep a broken regex) and set
+            // the banner; once a later refresh succeeds, that stale log/search
+            // error is obsolete. Only clear errors from log commands — a
+            // failed commit/pull banner must survive a background log refresh.
+            if let existing = actionError, existing.command.contains(" log ") {
+                actionError = nil
+            }
         } catch let error as GitError {
             guard generation == historyGeneration, !Task.isCancelled else { return }
             actionError = error

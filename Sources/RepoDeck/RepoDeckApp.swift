@@ -30,6 +30,11 @@ struct RepoDeckApp: App {
             SettingsView()
                 .environment(theme)
                 .environment(\.theme, Theme(settings: theme))
+                // preferredColorScheme does not cross window boundaries, so
+                // the Settings window must apply appearance/accent itself or
+                // it won't reflect the very options it is editing.
+                .preferredColorScheme(theme.appearance.colorScheme)
+                .tint(theme.accent)
         }
     }
 }
