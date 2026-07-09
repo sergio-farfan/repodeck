@@ -41,7 +41,7 @@ struct FileChangeRow: View {
                     .truncationMode(.middle)
                 if let dimmedText {
                     Text(dimmedText)
-                        .font(theme.caption)
+                        .font(theme.mono(10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)

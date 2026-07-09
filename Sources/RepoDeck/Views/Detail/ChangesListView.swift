@@ -49,6 +49,7 @@ struct ChangesListView: View {
                 } header: {
                     HStack {
                         Text("Changes (\(unstaged.count))")
+                            .font(theme.caption)
                         Spacer()
                         Button("Stage All") {
                             Task { await vm.stageAll() }
