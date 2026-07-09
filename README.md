@@ -12,7 +12,9 @@
 
 **Native macOS dashboard for the git status of all your local repositories.**
 
-<!-- ![RepoDeck screenshot](docs/screenshot.png) -->
+<p align="center">
+  <img src="docs/screenshot.png" alt="RepoDeck — multi-repo git status dashboard" width="800">
+</p>
 
 ## Download
 
