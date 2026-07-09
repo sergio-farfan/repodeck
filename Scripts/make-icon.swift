@@ -39,7 +39,10 @@ func usageAndExit() -> Never {
 let arguments = CommandLine.arguments
 let mode: Mode
 switch arguments.count {
-case 2:
+// Reject flag-like args in the single-arg form: `--dmg-background` with a
+// missing path (or `--help`) must show usage, not silently become an app
+// icon written to a file literally named after the flag.
+case 2 where !arguments[1].hasPrefix("--"):
     mode = .appIcon(path: arguments[1])
 case 3 where arguments[1] == "--dmg-background":
     mode = .dmgBackground(path: arguments[2])
