@@ -1,5 +1,12 @@
 import Foundation
 
+/// Outcome of `GitClient.pushWithAutoRebase(in:)`: whether the push landed
+/// on the first attempt or required a rebase-and-retry.
+public enum PushOutcome: Sendable, Equatable {
+    case pushed
+    case rebasedAndPushed
+}
+
 /// Stateless façade over the git CLI: every view model calls into `GitClient`
 /// rather than shelling out directly. Composes `ProcessRunner` (subprocess
 /// execution), `PorcelainParser` (status), and `LogParser` (log) into typed
@@ -101,6 +108,31 @@ public struct GitClient: Sendable {
     /// `git -C <repo> push`
     public func push(in repo: URL) async throws {
         try await runVoid(["push"], in: repo)
+    }
+
+    /// `git push`, with automatic recovery from a non-fast-forward
+    /// rejection: on rejection, runs `git pull --rebase --autostash` and
+    /// retries the push exactly once. Any other push failure — and the
+    /// retry's own failure — is rethrown unchanged, with no rebase
+    /// attempted. If the rebase itself fails (e.g. conflicts), a
+    /// best-effort `git rebase --abort` restores the pre-pull state before
+    /// the pull's error is rethrown, so the repo is never left mid-rebase;
+    /// the abort's own result is ignored because it fails harmlessly when
+    /// the pull never actually started a rebase.
+    public func pushWithAutoRebase(in repo: URL) async throws -> PushOutcome {
+        do {
+            try await runVoid(["push"], in: repo)
+            return .pushed
+        } catch let error as GitError where error.isNonFastForwardPushRejection {
+            do {
+                try await runVoid(["pull", "--rebase", "--autostash"], in: repo)
+            } catch let pullError as GitError {
+                try? await runVoid(["rebase", "--abort"], in: repo)
+                throw pullError
+            }
+            try await runVoid(["push"], in: repo)
+            return .rebasedAndPushed
+        }
     }
 
     /// `git -C <repo> fetch`

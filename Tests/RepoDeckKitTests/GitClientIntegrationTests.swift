@@ -4,9 +4,8 @@ import Testing
 
 /// Integration tests exercising `GitClient` against real, disposable git
 /// repositories under `FileManager.default.temporaryDirectory`. No test ever
-/// touches a real user repo, and none performs network operations (pull/push/
-/// fetch are intentionally not covered here — their command construction is
-/// identical in shape to the mutating commands that ARE tested).
+/// touches a real user repo, and none reaches the network — push/pull flows
+/// are covered in `GitClientSyncTests` using a local bare repo as the remote.
 @Suite struct GitClientIntegrationTests {
     /// Creates a unique temp git repo with a stable, non-interactive identity,
     /// runs `body` against it, then removes the temp dir unconditionally.
