@@ -12,6 +12,7 @@ import RepoDeckKit
 final class AppModel {
     private static let trackedFolderPathsKey = "trackedFolderPaths"
     private static let pinnedRepoIDsKey = "pinnedRepoIDs"
+    private static let autoRebaseRepoIDsKey = "autoRebaseRepoIDs"
     /// Minimum interval between watcher-triggered rescans. Guards against
     /// rescan storms when a burst of `.possibleNewRepo` events lands right
     /// after a rescan already ran (e.g. a multi-step `git clone`).
@@ -30,6 +31,10 @@ final class AppModel {
     var isScanning = false
     var selectedRepoID: String?
     var pinnedRepoIDs: Set<String>
+    /// Repos (by id, i.e. path) with "auto-rebase on rejected push" enabled.
+    /// Persisted like `pinnedRepoIDs`; mirrored onto each `RepoViewModel`'s
+    /// `autoRebaseOnRejectedPush` flag, which is what `push()` reads.
+    var autoRebaseRepoIDs: Set<String>
     var filterText: String = ""
     /// Non-nil while `fetchAll`/`pullAll` is running. Also the reentrancy
     /// guard: a bulk op only starts when this is nil, so Fetch All and Pull
@@ -64,6 +69,9 @@ final class AppModel {
         let pinnedIDs = UserDefaults.standard.stringArray(forKey: Self.pinnedRepoIDsKey) ?? []
         pinnedRepoIDs = Set(pinnedIDs)
 
+        let autoRebaseIDs = UserDefaults.standard.stringArray(forKey: Self.autoRebaseRepoIDsKey) ?? []
+        autoRebaseRepoIDs = Set(autoRebaseIDs)
+
         watcherTask = Task { [weak self] in
             guard let events = self?.watcher.events else { return }
             for await event in events {
@@ -96,6 +104,18 @@ final class AppModel {
             pinnedRepoIDs.insert(id)
         }
         UserDefaults.standard.set(Array(pinnedRepoIDs), forKey: Self.pinnedRepoIDsKey)
+    }
+
+    /// Adds or removes `id` from the auto-rebase set, persists it, and
+    /// updates the live view model's flag so the next Push picks it up.
+    func toggleAutoRebase(_ id: String) {
+        if autoRebaseRepoIDs.contains(id) {
+            autoRebaseRepoIDs.remove(id)
+        } else {
+            autoRebaseRepoIDs.insert(id)
+        }
+        UserDefaults.standard.set(Array(autoRebaseRepoIDs), forKey: Self.autoRebaseRepoIDsKey)
+        repos.first { $0.id == id }?.autoRebaseOnRejectedPush = autoRebaseRepoIDs.contains(id)
     }
 
     /// Drops a repo from the in-memory list only (e.g. a missing repo the
@@ -233,7 +253,12 @@ final class AppModel {
         // Reuse existing view models by id so future per-repo state survives a rescan.
         let existingByID = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0) })
         repos = deduped.map { repo in
-            existingByID[repo.id] ?? RepoViewModel(repo: repo, client: client)
+            if let existing = existingByID[repo.id] {
+                return existing
+            }
+            let vm = RepoViewModel(repo: repo, client: client)
+            vm.autoRebaseOnRejectedPush = autoRebaseRepoIDs.contains(repo.id)
+            return vm
         }
 
         if let selectedRepoID, !repos.contains(where: { $0.id == selectedRepoID }) {

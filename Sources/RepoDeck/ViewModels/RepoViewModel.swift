@@ -29,6 +29,16 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Set by a failed stage/unstage/commit/sync action; cleared on the next
     /// successful action. Rendered by `ErrorBanner` in `RepoDetailView`.
     var actionError: GitError?
+    /// Per-repo policy seeded from `AppModel.autoRebaseRepoIDs` (the
+    /// persisted source of truth): when true, `push()` recovers from a
+    /// non-fast-forward rejection by rebasing onto upstream and retrying
+    /// once.
+    var autoRebaseOnRejectedPush = false
+    /// Info-level counterpart to `actionError`: set when an action succeeded
+    /// but did something worth surfacing (an auto-rebase before push).
+    /// Cleared at the start of the next action and on manual dismiss.
+    /// Rendered by `NoticeBanner` in `RepoDetailView`.
+    var actionNotice: String?
 
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
     /// that arrives mid-refresh is folded into a single trailing refresh
@@ -202,6 +212,7 @@ final class RepoViewModel: @MainActor Identifiable {
         guard !trimmedMessage.isEmpty, hasStagedChanges, !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
+        actionNotice = nil
         do {
             try await client.commit(message: trimmedMessage, in: repo.path)
             actionError = nil
@@ -221,10 +232,21 @@ final class RepoViewModel: @MainActor Identifiable {
         await performAction(refreshingLog: true) { try await self.client.pull(in: self.repo.path) }
     }
 
-    /// Pushes local commits upstream. The log is unchanged by a push, but
-    /// refreshing status anyway picks up the new ahead/behind counts.
+    /// Pushes local commits upstream, refreshing status for the new
+    /// ahead/behind counts. With `autoRebaseOnRejectedPush` set, a
+    /// non-fast-forward rejection triggers `git pull --rebase --autostash`
+    /// and a single retry — and since that can pull new commits in, the log
+    /// is refreshed too in that mode.
     func push() async {
-        await performAction { try await self.client.push(in: self.repo.path) }
+        if autoRebaseOnRejectedPush {
+            await performAction(refreshingLog: true) {
+                if try await self.client.pushWithAutoRebase(in: self.repo.path) == .rebasedAndPushed {
+                    self.actionNotice = "Push rejected — rebased onto \(self.status?.upstream ?? "remote") and pushed"
+                }
+            }
+        } else {
+            await performAction { try await self.client.push(in: self.repo.path) }
+        }
     }
 
     /// Fetches from upstream without merging — updates ahead/behind counts.
@@ -241,6 +263,7 @@ final class RepoViewModel: @MainActor Identifiable {
         guard !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
+        actionNotice = nil
         do {
             try await operation()
             actionError = nil
