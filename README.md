@@ -43,6 +43,7 @@ Prefer to build it yourself? See [Build from source](#build-from-source).
 - **Live FSEvents status** — sidebar badges, ahead/behind counts, and the uncommitted-changes indicator update the moment something changes on disk, with no polling.
 - **Stage, commit, pull, push, fetch** — stage or unstage individual files, "Stage All", commit with ⌘⏎, and pull/push/fetch the selected repo from the buttons under the commit box.
 - **Bulk Fetch All / Pull All** — fetch or pull every tracked repo at once, with a toolbar progress readout and a dismissible summary of any that failed.
+- **Auto-rebase on rejected push (per repo)** — right-click a repo and enable **Auto-Rebase on Rejected Push**: when a push is rejected because the remote has new commits, RepoDeck runs `git pull --rebase --autostash` and retries the push once, then shows a dismissible notice. A conflicting rebase aborts cleanly back to the pre-rebase state. Off by default for every repo.
 - **Sidebar filter + pinning** — filter the list by repo name or branch, and pin the repos you touch most often into their own section above the rest.
 - **History search** by commit message, author, file path, or content (git's pickaxe search) — scoped per repo, updating as you type.
 - **Resizable Changes/History split** — drag the divider to give more vertical room to whichever pane you're using.
@@ -54,7 +55,7 @@ Add one or more folders — from the toolbar's **Add Folder…** button, or the 
 
 Stage a file from its row, or use **Stage All**; type a commit message and either click **Commit** or press ⌘⏎ while the message field has focus. **Pull**, **Push**, and **Fetch** for the selected repo sit in a row under the commit box, next to an ahead/behind readout and the current upstream. **Fetch All** and **Pull All**, in the toolbar, do the same across every tracked repo at once; a progress bar tracks how many are done, and a dismissible banner reports how many failed.
 
-Each sidebar row carries a change-count badge and, when applicable, an ahead/behind readout (↑/↓). A small orange dot next to the branch name flags uncommitted changes sitting on `main` or `master` specifically — a repo you probably don't want to leave dirty. Right-click any repo for Pin/Unpin, Reveal in Finder, Open in Terminal, Open in VS Code (shown only if it's installed), Copy Path, or, for a repo that's vanished from disk, Remove.
+Each sidebar row carries a change-count badge and, when applicable, an ahead/behind readout (↑/↓). A small orange dot next to the branch name flags uncommitted changes sitting on `main` or `master` specifically — a repo you probably don't want to leave dirty. Right-click any repo for Pin/Unpin, the per-repo Auto-Rebase on Rejected Push toggle, Reveal in Finder, Open in Terminal, Open in VS Code (shown only if it's installed), Copy Path, or, for a repo that's vanished from disk, Remove.
 
 The History search field matches against whichever scope is selected — Message, Author, File, or Content (git's pickaxe search) — and updates as you type.
 
