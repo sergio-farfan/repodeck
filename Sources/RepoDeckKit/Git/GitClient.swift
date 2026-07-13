@@ -112,9 +112,10 @@ public struct GitClient: Sendable {
 
     /// `git push`, with automatic recovery from a non-fast-forward
     /// rejection: on rejection, runs `git pull --rebase --autostash` and
-    /// retries the push exactly once. Any other push failure — and the
-    /// retry's own failure — is rethrown unchanged, with no rebase
-    /// attempted. If the rebase itself fails (e.g. conflicts), a
+    /// retries the push exactly once. A first-push failure that is not a
+    /// rejection is rethrown unchanged, with no rebase attempted; the
+    /// retry's own failure is rethrown unchanged after the rebase has
+    /// already completed. If the rebase itself fails (e.g. conflicts), a
     /// best-effort `git rebase --abort` restores the pre-pull state before
     /// the pull's error is rethrown, so the repo is never left mid-rebase;
     /// the abort's own result is ignored because it fails harmlessly when

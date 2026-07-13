@@ -63,9 +63,12 @@ import Testing
         try await git(["add", "-A"], in: seed)
         try await git(["commit", "-m", "chore: base"], in: seed)
 
-        _ = try await ProcessRunner.run(arguments: ["clone", "--bare", seed.path, remote.path])
-        _ = try await ProcessRunner.run(arguments: ["clone", remote.path, ours.path])
-        _ = try await ProcessRunner.run(arguments: ["clone", remote.path, theirs.path])
+        let cloneRemote = try await ProcessRunner.run(arguments: ["clone", "--bare", seed.path, remote.path])
+        try #require(cloneRemote.exitCode == 0, "git clone failed: \(cloneRemote.stderr)")
+        let cloneOurs = try await ProcessRunner.run(arguments: ["clone", remote.path, ours.path])
+        try #require(cloneOurs.exitCode == 0, "git clone failed: \(cloneOurs.stderr)")
+        let cloneTheirs = try await ProcessRunner.run(arguments: ["clone", remote.path, theirs.path])
+        try #require(cloneTheirs.exitCode == 0, "git clone failed: \(cloneTheirs.stderr)")
         try await configureIdentity(in: ours)
         try await configureIdentity(in: theirs)
 
@@ -159,7 +162,60 @@ import Testing
         }
     }
 
-    // MARK: 5. Non-rejection failure: no rebase attempted, error passthrough
+    // MARK: 5. Conflict + dirty worktree: abort preserves the uncommitted edit
+
+    /// Mirrors `conflictAbortsRebaseAndRestoresState` but with an uncommitted
+    /// edit to a tracked file sitting in the worktree when the conflicting
+    /// rebase kicks off, so `--autostash` actually has something to stash.
+    /// Pins that the abort path never loses that uncommitted user data.
+    @Test func conflictAbortsRebaseAndRestoresStateWithDirtyWorktree() async throws {
+        try await withSharedRemote { _, ours, theirs, client in
+            // Both sides edit the same line of the same file → guaranteed conflict.
+            try await commitFile("base.txt", content: "theirs change\n", message: "feat: theirs", in: theirs, client: client)
+            try await client.push(in: theirs)
+
+            // `ours`'s conflicting commit also introduces a second tracked
+            // file, so the dirty edit below is independent of the conflict.
+            try "ours change\n".write(to: ours.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
+            try "clean\n".write(to: ours.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+            try await client.stageAll(in: ours)
+            try await client.commit(message: "feat: ours", in: ours)
+
+            // Uncommitted edit to the tracked file: this is what `--autostash`
+            // must stash before the conflicting rebase and, per this test,
+            // must not lose when the rebase is subsequently aborted.
+            let dirtyEdit = "dirty edit — must survive abort\n"
+            try dirtyEdit.write(to: ours.appendingPathComponent("tracked.txt"), atomically: true, encoding: .utf8)
+
+            let headBefore = try await headOID(in: ours)
+
+            do {
+                _ = try await client.pushWithAutoRebase(in: ours)
+                Issue.record("expected the conflicting rebase to throw")
+            } catch let error as GitError {
+                #expect(error.command.contains("pull --rebase --autostash"))
+            }
+
+            // Never left mid-rebase; pre-rebase HEAD restored.
+            #expect(!FileManager.default.fileExists(atPath: ours.appendingPathComponent(".git/rebase-merge").path))
+            #expect(!FileManager.default.fileExists(atPath: ours.appendingPathComponent(".git/rebase-apply").path))
+            let headAfter = try await headOID(in: ours)
+            #expect(headBefore == headAfter)
+
+            // The uncommitted edit must survive somewhere: either restored to
+            // the worktree by `rebase --abort` (git's documented autostash
+            // behavior) or, failing that, retained in the stash. Losing it
+            // outright (neither worktree nor stash) is a data-loss bug.
+            let stashList = try await git(["stash", "list"], in: ours)
+            let stashIsEmpty = String(decoding: stashList.stdout, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let trackedContent = try String(contentsOf: ours.appendingPathComponent("tracked.txt"), encoding: .utf8)
+            #expect(trackedContent == dirtyEdit)
+            #expect(stashIsEmpty)
+        }
+    }
+
+    // MARK: 6. Non-rejection failure: no rebase attempted, error passthrough
 
     @Test func nonRejectionPushFailurePassesThroughWithoutRebase() async throws {
         try await withSharedRemote { _, ours, _, client in
@@ -181,7 +237,7 @@ import Testing
         }
     }
 
-    // MARK: 6. Autostash: dirty tracked file survives the rebase-retry
+    // MARK: 7. Autostash: dirty tracked file survives the rebase-retry
 
     @Test func autostashPreservesUncommittedChanges() async throws {
         try await withSharedRemote { _, ours, theirs, client in
@@ -203,7 +259,7 @@ import Testing
         }
     }
 
-    // MARK: 7. Autostash pop conflict: push still lands, changes kept in stash
+    // MARK: 8. Autostash pop conflict: push still lands, changes kept in stash
 
     /// Pins the spec's documented edge case: the rebase succeeds, but
     /// re-applying the autostashed edit conflicts with the pulled commit.
