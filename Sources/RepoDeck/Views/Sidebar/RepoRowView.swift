@@ -87,6 +87,11 @@ struct RepoRowView: View {
             }
         }
 
+        Toggle("Auto-Rebase on Rejected Push", isOn: Binding(
+            get: { model.autoRebaseRepoIDs.contains(vm.id) },
+            set: { _ in model.toggleAutoRebase(vm.id) }
+        ))
+
         Divider()
 
         Button("Reveal in Finder") {

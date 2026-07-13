@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Container for the selected repo's detail pane: an `ErrorBanner` for the
-/// most recent action failure, a commit box, sync controls (pull/push/
+/// most recent action failure, a `NoticeBanner` for info-level outcomes
+/// (e.g. auto-rebase before push), a commit box, sync controls (pull/push/
 /// fetch), the changes list, and the commit history.
 struct RepoDetailView: View {
     let vm: RepoViewModel
@@ -16,6 +17,7 @@ struct RepoDetailView: View {
 
         VStack(alignment: .leading, spacing: 0) {
             ErrorBanner(error: $vm.actionError)
+            NoticeBanner(notice: $vm.actionNotice)
 
             CommitBoxView(vm: vm)
 
