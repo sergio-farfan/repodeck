@@ -84,7 +84,7 @@ Follows the existing layering: View → view model (app target) → `GitClient` 
 
 `Sources/RepoDeckKit/Git/GitClient.swift`
 - `public enum PushOutcome: Sendable { case pushed, rebasedAndPushed }`
-- `public func pushWithAutoRebase(in repo: Repo) async throws -> PushOutcome` —
+- `public func pushWithAutoRebase(in repo: URL) async throws -> PushOutcome` —
   the composite above. Internal steps reuse the private `run`/`runVoid` helpers:
   `pull --rebase --autostash`, `rebase --abort`.
 
@@ -114,10 +114,11 @@ Follows the existing layering: View → view model (app target) → `GitClient` 
 - Context menu: checkable "Auto-rebase on rejected push" item (checkmark when
   enabled), placed with Pin/Unpin, calling `model.toggleAutoRebase(vm.id)`.
 
-`Views/Shared/ErrorBanner.swift`
-- Generalized to two variants: **error** (red, identical to today, bound to
-  `actionError`) and **info** (accent-tinted, bound to `actionNotice`). Mounted in
-  the same top slot of `RepoDetailView`.
+`Views/Shared/NoticeBanner.swift` (new)
+- Sibling view to `ErrorBanner.swift` rather than a generalization of it:
+  an **info** variant (accent-tinted) mirroring `ErrorBanner`'s chrome, bound
+  to `actionNotice`. `ErrorBanner` itself is unchanged. Mounted in the same
+  top slot of `RepoDetailView`, alongside the existing error banner.
 
 ## Data flow
 
