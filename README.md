@@ -44,18 +44,22 @@ Prefer to build it yourself? See [Build from source](#build-from-source).
 - **Stage, commit, pull, push, fetch** — stage or unstage individual files, "Stage All", commit with ⌘⏎, and pull/push/fetch the selected repo from the buttons under the commit box.
 - **Bulk Fetch All / Pull All** — fetch or pull every tracked repo at once, with a toolbar progress readout and a dismissible summary of any that failed.
 - **Auto-rebase on rejected push (per repo)** — right-click a repo and enable **Auto-Rebase on Rejected Push**: when a push is rejected because the remote has new commits, RepoDeck runs `git pull --rebase --autostash` and retries the push once, then shows a dismissible notice. A conflicting rebase aborts cleanly back to the pre-rebase state. Off by default for every repo.
-- **Sidebar filter + pinning** — filter the list by repo name or branch, and pin the repos you touch most often into their own section above the rest.
+- **Per-repo auto-fetch** — set a fetch interval (5/15/30/60 minutes) per repo in Repository Settings; RepoDeck fetches quietly in the background and keeps ahead/behind counts current. Background fetches never raise an error banner — going offline stays quiet — and run in a capped background lane, so they never delay anything you do yourself; your own pulls, pushes, and fetches always jump the queue.
+- **Repo groups** — organize repos into named sidebar sections, assigned from Repository Settings or right-click → **Move to Group**.
+- **Command palette** — press ⌘K to jump to any repo or run a common action (Fetch All, Pull All, Refresh Repositories, or the selected repo's Pull/Push/Fetch/Reveal in Finder/Open in Terminal) from the keyboard, with matches ranked prefix > word-boundary > substring.
+- **Repository Settings sheet** — right-click a repo → **Repository Settings…** to set auto-rebase, auto-fetch interval, and group assignment together in one place; changes apply immediately.
+- **Sidebar filter + pinning** — filter the list by repo name or branch, and pin the repos you touch most often into their own section above the rest, alongside any named groups you've set up.
 - **History search** by commit message, author, file path, or content (git's pickaxe search) — scoped per repo, updating as you type.
 - **Resizable Changes/History split** — drag the divider to give more vertical room to whichever pane you're using.
 - **Themes** (System/Light/Dark), custom accent color, fonts, and font size (⌘,) — a Settings window covers appearance, accent color, UI and monospace font family, and base text size.
 
 ## Usage
 
-Add one or more folders — from the toolbar's **Add Folder…** button, or the empty-state prompt on first launch — and RepoDeck recursively discovers every git repository underneath them and lists them in the sidebar, sorted alphabetically, with pinned repos in a section of their own above the rest. Selecting a repo shows its status: a **Changes** pane (merge conflicts, staged, unstaged, and untracked files, each in its own section) and, below it, a searchable **History** pane. Drag the divider between the two to resize them.
+Add one or more folders — from the toolbar's **Add Folder…** button, or the empty-state prompt on first launch — and RepoDeck recursively discovers every git repository underneath them and lists them in the sidebar, sorted alphabetically, with pinned repos in a section of their own above the rest, followed by one section per group you've created, then the remaining ungrouped repos. Selecting a repo shows its status: a **Changes** pane (merge conflicts, staged, unstaged, and untracked files, each in its own section) and, below it, a searchable **History** pane. Drag the divider between the two to resize them.
 
 Stage a file from its row, or use **Stage All**; type a commit message and either click **Commit** or press ⌘⏎ while the message field has focus. **Pull**, **Push**, and **Fetch** for the selected repo sit in a row under the commit box, next to an ahead/behind readout and the current upstream. **Fetch All** and **Pull All**, in the toolbar, do the same across every tracked repo at once; a progress bar tracks how many are done, and a dismissible banner reports how many failed.
 
-Each sidebar row carries a change-count badge and, when applicable, an ahead/behind readout (↑/↓). A small orange dot next to the branch name flags uncommitted changes sitting on `main` or `master` specifically — a repo you probably don't want to leave dirty. Right-click any repo for Pin/Unpin, the per-repo Auto-Rebase on Rejected Push toggle, Reveal in Finder, Open in Terminal, Open in VS Code (shown only if it's installed), Copy Path, or, for a repo that's vanished from disk, Remove.
+Each sidebar row carries a change-count badge and, when applicable, an ahead/behind readout (↑/↓). A small orange dot next to the branch name flags uncommitted changes sitting on `main` or `master` specifically — a repo you probably don't want to leave dirty. Right-click any repo for Pin/Unpin, the per-repo Auto-Rebase on Rejected Push toggle, Repository Settings… (auto-rebase, auto-fetch, and group in one sheet), Move to Group, Reveal in Finder, Open in Terminal, Open in VS Code (shown only if it's installed), Copy Path, or, for a repo that's vanished from disk, Remove.
 
 The History search field matches against whichever scope is selected — Message, Author, File, or Content (git's pickaxe search) — and updates as you type.
 
@@ -64,6 +68,7 @@ The History search field matches against whichever scope is selected — Message
 | <kbd>⌘</kbd><kbd>⏎</kbd> | Commit, while the message field has focus |
 | <kbd>⌘</kbd><kbd>R</kbd> | Refresh — rescan all tracked folders |
 | <kbd>⌘</kbd><kbd>,</kbd> | Open Settings — appearance, accent color, fonts, size |
+| <kbd>⌘</kbd><kbd>K</kbd> | Command Palette |
 
 ## Build from source
 
@@ -73,7 +78,7 @@ RepoDeck is Swift Package Manager only — there's no `.xcodeproj`, just `Packag
 git clone git@github.com:sergio-farfan/repodeck.git
 cd repodeck
 swift build            # compile
-swift test             # run the test suite (71 tests)
+swift test             # run the test suite (122 tests)
 swift run RepoDeck     # run in dev mode
 Scripts/bundle.sh --open   # build and launch the .app bundle (dist/RepoDeck.app)
 Scripts/make-dmg.sh        # package the installer DMG (--release publishes a GitHub Release)
