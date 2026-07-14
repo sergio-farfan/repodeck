@@ -43,6 +43,8 @@ final class AppModel {
     var selectedRepoID: String?
     /// The repo whose settings sheet is presented; nil = no sheet.
     var repoSettingsTarget: RepoViewModel?
+    /// Whether the ⌘K command palette overlay is presented.
+    var isPaletteVisible = false
     /// Consolidated per-repo settings (pin, auto-rebase, auto-fetch
     /// interval, group), keyed by repo id (i.e. path). Persisted as one
     /// JSON blob under `repoSettingsKey`. `private(set)`: `updateSettings`

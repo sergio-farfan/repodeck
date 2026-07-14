@@ -17,6 +17,11 @@ struct ContentView: View {
         .sheet(item: $model.repoSettingsTarget) { vm in
             RepoSettingsSheet(vm: vm)
         }
+        .overlay {
+            if model.isPaletteVisible {
+                CommandPaletteView()
+            }
+        }
         .task {
             if !model.trackedFolders.isEmpty && model.repos.isEmpty {
                 await model.rescan()

@@ -22,6 +22,11 @@ struct RepoDeckApp: App {
                     Task { await model.rescan() }
                 }
                 .keyboardShortcut("r", modifiers: .command)
+
+                Button("Command Palette") {
+                    model.isPaletteVisible = true
+                }
+                .keyboardShortcut("k", modifiers: .command)
             }
         }
 
