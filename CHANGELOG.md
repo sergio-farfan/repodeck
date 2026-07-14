@@ -5,16 +5,22 @@ All notable changes to RepoDeck will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-07-14
 
 ### Added
 
 - Per-repo **Auto-Rebase on Rejected Push** toggle (right-click a repo in the sidebar): when a push is rejected because the remote has new commits, RepoDeck runs `git pull --rebase --autostash` and retries the push once, surfacing a dismissible notice on success. A conflicting rebase is aborted cleanly, leaving the repo exactly as it was.
+- **Repository Settings sheet** — right-click a repo, "Repository Settings…": auto-rebase on rejected push, auto-fetch interval, and group assignment. Changes apply immediately.
+- **Per-repo auto-fetch** — set an interval (5/15/30/60 minutes) per repo; RepoDeck fetches quietly in the background and updates ahead/behind counts. Background fetches never raise error banners (going offline stays quiet) and run in a capped background lane (4 of 6 subprocess slots) so they never delay user-initiated actions, which jump the queue.
+- **Repo groups** — assign repos to named sidebar groups via the settings sheet or right-click → Move to Group. Sidebar order: Pinned, then one section per group (alphabetical), then ungrouped Repositories; the filter applies within sections.
+- **Command palette (⌘K)** — jump to any repo or run Fetch All / Pull All / Refresh Repositories and selected-repo Pull / Push / Fetch / Reveal in Finder / Open in Terminal from the keyboard, ranked prefix > word-boundary > substring.
 
 ### Changed
 
 - Changed files now always open in TextEdit (both double-click and the "Open in Editor" context menu item). Binary or deleted files no longer offer an open action.
 - Double-clicking a file now flashes the row with the accent color as open-acknowledgment feedback.
+- Network git operations now time out instead of hanging forever: fetch after 90 seconds, pull/push after 5 minutes, reported as a normal per-repo error.
+- Per-repo settings (pin, auto-rebase, auto-fetch, group) are consolidated into a single store; existing pins and auto-rebase toggles migrate automatically on first launch.
 
 ## [1.2.0] - 2026-07-08
 
@@ -55,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sidebar filter and pinning.
 - History list.
 
+[1.3.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.3.0
 [1.2.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.2.0
 [1.1.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.0.0
