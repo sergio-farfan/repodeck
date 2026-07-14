@@ -60,6 +60,7 @@ struct RepoSettingsSheet: View {
 
                 HStack {
                     TextField("New group", text: $newGroupName)
+                        .onSubmit { addGroup() }
                     Button("Add") {
                         addGroup()
                     }
