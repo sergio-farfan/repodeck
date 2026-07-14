@@ -341,33 +341,29 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Stashes the current changes. `message` is optional (`git stash push`
     /// falls back to its own default subject); `includeUntracked` maps to
     /// `--include-untracked`. `performAction` already refreshes `status`
-    /// afterward; this additionally refreshes `stashes` so the new entry
-    /// shows up immediately.
+    /// afterward; `refreshingStashes` additionally refreshes `stashes` so the
+    /// new entry shows up immediately.
     func stashPush(message: String?, includeUntracked: Bool) async {
-        await performAction {
+        await performAction(refreshingStashes: true) {
             try await self.client.stashPush(message: message, includeUntracked: includeUntracked, in: self.repo.path)
         }
-        await refreshStashes()
     }
 
     /// Applies `stash@{index}` without dropping it.
     func stashApply(_ index: Int) async {
-        await performAction { try await self.client.stashApply(index, in: self.repo.path) }
-        await refreshStashes()
+        await performAction(refreshingStashes: true) { try await self.client.stashApply(index, in: self.repo.path) }
     }
 
     /// Applies `stash@{index}` and drops it on success.
     func stashPop(_ index: Int) async {
-        await performAction { try await self.client.stashPop(index, in: self.repo.path) }
-        await refreshStashes()
+        await performAction(refreshingStashes: true) { try await self.client.stashPop(index, in: self.repo.path) }
     }
 
     /// Drops `stash@{index}` without applying it. Confirmation lives in the
     /// view (`StashSection`'s `.confirmationDialog`) — this method just does
     /// the drop.
     func stashDrop(_ index: Int) async {
-        await performAction { try await self.client.stashDrop(index, in: self.repo.path) }
-        await refreshStashes()
+        await performAction(refreshingStashes: true) { try await self.client.stashDrop(index, in: self.repo.path) }
     }
 
     /// Background fetch on the scheduler's behalf: quietly refreshes remote
@@ -399,8 +395,15 @@ final class RepoViewModel: @MainActor Identifiable {
     /// busy for the duration, record failure in `actionError` (clearing it on
     /// success), then refresh status regardless of outcome. Sync actions
     /// (`pull`) additionally refresh the log, since new commits may have
-    /// arrived.
-    private func performAction(refreshingLog: Bool = false, _ operation: () async throws -> Void) async {
+    /// arrived; stash actions refresh the stash list. Both refreshes run
+    /// while still `isBusy`, so a follow-up action can't fire against a
+    /// stale log/stash list — `stash@{N}` indices in particular shift on
+    /// drop/pop, so the list must be back in sync before the guard reopens.
+    private func performAction(
+        refreshingLog: Bool = false,
+        refreshingStashes: Bool = false,
+        _ operation: () async throws -> Void
+    ) async {
         guard !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
@@ -416,6 +419,9 @@ final class RepoViewModel: @MainActor Identifiable {
         await refreshStatus()
         if refreshingLog {
             await refreshLog()
+        }
+        if refreshingStashes {
+            await refreshStashes()
         }
     }
 }
