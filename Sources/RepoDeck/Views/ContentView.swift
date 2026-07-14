@@ -6,12 +6,17 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var model = model
+
         NavigationSplitView {
             RepoListView()
         } detail: {
             detailContent
         }
         .frame(minWidth: 800, minHeight: 500)
+        .sheet(item: $model.repoSettingsTarget) { vm in
+            RepoSettingsSheet(vm: vm)
+        }
         .task {
             if !model.trackedFolders.isEmpty && model.repos.isEmpty {
                 await model.rescan()

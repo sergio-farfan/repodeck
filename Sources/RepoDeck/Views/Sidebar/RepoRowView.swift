@@ -92,6 +92,10 @@ struct RepoRowView: View {
             set: { _ in model.toggleAutoRebase(vm.id) }
         ))
 
+        Button("Repository Settings…") {
+            model.repoSettingsTarget = vm
+        }
+
         Divider()
 
         Button("Reveal in Finder") {

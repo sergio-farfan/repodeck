@@ -41,6 +41,8 @@ final class AppModel {
     var repos: [RepoViewModel] = []
     var isScanning = false
     var selectedRepoID: String?
+    /// The repo whose settings sheet is presented; nil = no sheet.
+    var repoSettingsTarget: RepoViewModel?
     /// Consolidated per-repo settings (pin, auto-rebase, auto-fetch
     /// interval, group), keyed by repo id (i.e. path). Persisted as one
     /// JSON blob under `repoSettingsKey`. `private(set)`: `updateSettings`
@@ -136,6 +138,15 @@ final class AppModel {
     /// (i.e. it has never had a non-default setting).
     func settings(for id: String) -> RepoSettings {
         repoSettingsByID[id] ?? RepoSettings()
+    }
+
+    /// Sorted unique non-nil group names currently assigned to any repo.
+    /// Backs the settings sheet's Group picker; a later groups feature task
+    /// reuses it for the sidebar.
+    var groupNames: [String] {
+        Array(Set(repoSettingsByID.values.compactMap(\.group))).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
     }
 
     /// Sole write path for per-repo settings: mutates a copy, prunes it back
