@@ -3,6 +3,14 @@ import Foundation
 import Darwin
 #endif
 
+/// Scheduling lane for a subprocess: interactive work (user-initiated
+/// actions, status refreshes) always beats background work (auto-fetch,
+/// integrations polling) for limiter slots.
+public enum SubprocessPriority: Sendable {
+    case interactive
+    case background
+}
+
 /// Result of a completed subprocess invocation.
 ///
 /// Only this type crosses isolation boundaries; the underlying `Process`/`Pipe`
@@ -12,12 +20,24 @@ public struct ProcessResult: Sendable {
     public let stdout: Data
     public let stderr: String
     public let outputTruncated: Bool
+    /// True when the timeout watchdog (see `ProcessRunner.run(timeout:)`) had
+    /// to intervene because the child outlived its deadline. When true, the
+    /// exit code reflects the SIGTERM/SIGKILL signal exit, not a real
+    /// command failure.
+    public let timedOut: Bool
 
-    public init(exitCode: Int32, stdout: Data, stderr: String, outputTruncated: Bool) {
+    public init(
+        exitCode: Int32,
+        stdout: Data,
+        stderr: String,
+        outputTruncated: Bool,
+        timedOut: Bool = false
+    ) {
         self.exitCode = exitCode
         self.stdout = stdout
         self.stderr = stderr
         self.outputTruncated = outputTruncated
+        self.timedOut = timedOut
     }
 }
 
@@ -36,11 +56,14 @@ public enum ProcessRunner {
         arguments: [String],
         workingDirectory: URL? = nil,
         environment: [String: String] = [:],
-        maxOutputBytes: Int? = nil
+        maxOutputBytes: Int? = nil,
+        priority: SubprocessPriority = .interactive,
+        timeout: Duration? = nil
     ) async throws -> ProcessResult {
-        // (Req 3, 10) Acquire a global slot; release on every exit path.
-        await limiter.acquire()
-        defer { Task { await limiter.release() } }
+        // (Req 3, 10) Acquire a global slot; release on every exit path. The
+        // releaser must pass the same priority the acquirer used.
+        await limiter.acquire(priority)
+        defer { Task { await limiter.release(priority) } }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -66,8 +89,16 @@ public enum ProcessRunner {
         // or calling waitUntilExit on a thread. Set before launch so a fast
         // child's exit is never missed.
         let termination = TerminationSignal()
+        // Watchdog bookkeeping: a plain one-shot flag (not a continuation —
+        // nothing awaits it) telling the watchdog task whether the child has
+        // already exited on its own, so it never signals a pid that might
+        // since have been reused by the OS.
+        let watchdogState = WatchdogState()
         process.terminationHandler = { _ in
-            Task { await termination.signal() }
+            Task {
+                await watchdogState.markTerminated()
+                await termination.signal()
+            }
         }
 
         // Launching may fail (e.g. nonexistent executable); let it throw.
@@ -75,6 +106,20 @@ public enum ProcessRunner {
 
         // pid is Sendable, unlike Process — capture it for cancellation.
         let pid = process.processIdentifier
+
+        // Timeout watchdog: SIGTERM, then SIGKILL five seconds later if the
+        // child still hasn't exited. A no-op when `timeout` is nil.
+        let watchdogTask: Task<Void, Never>? = timeout.map { deadline in
+            Task {
+                try? await Task.sleep(for: deadline)
+                guard !(await watchdogState.hasTerminated) else { return }
+                await watchdogState.markTimedOut()
+                kill(pid, SIGTERM)
+                try? await Task.sleep(for: .seconds(5))
+                guard !(await watchdogState.hasTerminated) else { return }
+                kill(pid, SIGKILL)
+            }
+        }
 
         // (Req 1, 8) Bridge each pipe to a Sendable AsyncStream. The handlers
         // capture only the Sendable continuation; the non-Sendable Process/Pipe
@@ -107,12 +152,16 @@ public enum ProcessRunner {
 
             // Now that both streams are drained, block on actual exit.
             await termination.wait()
+            // Termination is signalled; stop the watchdog (harmless if it
+            // already fired or if there is no watchdog at all).
+            watchdogTask?.cancel()
 
             return ProcessResult(
                 exitCode: process.terminationStatus,
                 stdout: stdoutData,
                 stderr: stderrText,
-                outputTruncated: truncated
+                outputTruncated: truncated,
+                timedOut: await watchdogState.timedOut
             )
         } onCancel: {
             // Only the Sendable pid crosses into this @Sendable closure.
@@ -150,35 +199,73 @@ private func drainAll(_ stream: AsyncStream<Data>) async -> Data {
 
 // MARK: - Concurrency limiter
 
-/// Actor-based FIFO counting semaphore. No locks, no `nonisolated(unsafe)`.
+/// Actor-based two-tier FIFO counting semaphore. No locks, no
+/// `nonisolated(unsafe)`.
+///
+/// Interactive work always beats background work: an interactive `acquire`
+/// only ever competes for the shared `available` pool, while background work
+/// is additionally capped at `backgroundLimit` concurrent slots (of the
+/// shared `limit`) so it can never starve interactive callers of the
+/// remaining `limit - backgroundLimit` slots. `release` hands a freed slot
+/// directly to the oldest interactive waiter if any (queue-jump), else to the
+/// oldest background waiter if the background cap allows, else returns it to
+/// `available` — a slot handed directly to a waiter keeps `available`
+/// consumed the whole time, so there is never an increment-then-decrement
+/// race.
 actor ConcurrencyLimiter {
     private let limit: Int
+    private let backgroundLimit: Int
     private var available: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var interactiveWaiters: [CheckedContinuation<Void, Never>] = []
+    private var backgroundWaiters: [CheckedContinuation<Void, Never>] = []
+    private var activeBackground: Int = 0
 
-    init(limit: Int) {
+    init(limit: Int, backgroundLimit: Int = 4) {
         self.limit = limit
+        self.backgroundLimit = backgroundLimit
         self.available = limit
     }
 
-    func acquire() async {
-        if available > 0 {
-            available -= 1
-            return
-        }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+    func acquire(_ priority: SubprocessPriority) async {
+        switch priority {
+        case .interactive:
+            if available > 0 {
+                available -= 1
+                return
+            }
+            await withCheckedContinuation { continuation in
+                interactiveWaiters.append(continuation)
+            }
+
+        case .background:
+            if available > 0 && activeBackground < backgroundLimit {
+                available -= 1
+                activeBackground += 1
+                return
+            }
+            await withCheckedContinuation { continuation in
+                backgroundWaiters.append(continuation)
+            }
         }
     }
 
-    func release() {
-        if waiters.isEmpty {
-            available = min(available + 1, limit)
-        } else {
-            // FIFO: hand the freed slot directly to the oldest waiter, so
-            // `available` stays consumed.
-            let next = waiters.removeFirst()
+    /// The releaser must pass the same priority it acquired with.
+    func release(_ priority: SubprocessPriority) {
+        if case .background = priority {
+            activeBackground -= 1
+        }
+
+        if !interactiveWaiters.isEmpty {
+            // Queue-jump: interactive waiters always resume before
+            // background waiters, regardless of parking order.
+            let next = interactiveWaiters.removeFirst()
             next.resume()
+        } else if !backgroundWaiters.isEmpty && activeBackground < backgroundLimit {
+            activeBackground += 1
+            let next = backgroundWaiters.removeFirst()
+            next.resume()
+        } else {
+            available = min(available + 1, limit)
         }
     }
 }
@@ -209,4 +296,23 @@ private actor TerminationSignal {
             }
         }
     }
+}
+
+// MARK: - Timeout watchdog bookkeeping
+
+/// Plain one-shot flags shared between `ProcessRunner.run` and its timeout
+/// watchdog task. Unlike `TerminationSignal`, nothing ever awaits these —
+/// they're polled once the watchdog wakes from its sleep — so a pair of
+/// booleans is enough.
+private actor WatchdogState {
+    private(set) var hasTerminated = false
+    private(set) var timedOut = false
+
+    /// Set from `Process.terminationHandler`, before signalling
+    /// `TerminationSignal`, so a watchdog waking up after normal exit never
+    /// sends a signal to a pid the OS may since have reused.
+    func markTerminated() { hasTerminated = true }
+
+    /// Set by the watchdog when it decides to intervene.
+    func markTimedOut() { timedOut = true }
 }

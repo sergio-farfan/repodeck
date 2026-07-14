@@ -83,4 +83,128 @@ import Testing
         // 12 sleeps of 0.2s with cap 6 => at least two waves => >= ~0.4s.
         #expect(elapsed >= 0.35)
     }
+
+    // MARK: - Timeout watchdog
+
+    @Test func timeoutKillsHungChildPromptly() async throws {
+        let start = Date()
+        let result = try await ProcessRunner.run(
+            "/bin/sleep",
+            arguments: ["30"],
+            timeout: .milliseconds(200)
+        )
+        let elapsed = Date().timeIntervalSince(start)
+        #expect(elapsed < 5)
+        #expect(result.timedOut == true)
+        #expect(result.exitCode != 0)
+    }
+
+    @Test func noFalseTimeoutOnQuickCommand() async throws {
+        let result = try await ProcessRunner.run(
+            "/bin/sh",
+            arguments: ["-c", "exit 0"],
+            timeout: .seconds(30)
+        )
+        #expect(result.timedOut == false)
+        #expect(result.exitCode == 0)
+    }
+}
+
+// MARK: - ConcurrencyLimiter (priority tiers)
+
+@Suite struct ConcurrencyLimiterTests {
+    /// Actor-guarded ordered log used to assert resumption order deterministically.
+    private actor OrderLog {
+        private(set) var entries: [String] = []
+        func append(_ entry: String) { entries.append(entry) }
+    }
+
+    @Test func backgroundIsCappedAtFourWhileInteractiveSlotsRemainReserved() async throws {
+        let limiter = ConcurrencyLimiter(limit: 6)
+
+        // Four background acquires succeed immediately.
+        for _ in 0..<4 {
+            await limiter.acquire(.background)
+        }
+
+        // A fifth background acquire must park (activeBackground == backgroundLimit).
+        let fifthBackgroundStarted = OrderLog()
+        let fifthBackgroundAcquired = OrderLog()
+        let fifthBackgroundTask = Task {
+            await fifthBackgroundStarted.append("started")
+            await limiter.acquire(.background)
+            await fifthBackgroundAcquired.append("acquired")
+        }
+
+        // Give the fifth background task a chance to reach `acquire` and park.
+        while await fifthBackgroundStarted.entries.isEmpty {
+            await Task.yield()
+        }
+        // A brief grace period so the parked acquire call has actually
+        // registered as a waiter before we assert it hasn't completed.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await fifthBackgroundAcquired.entries.isEmpty)
+
+        // Two of the six slots are still reserved (available == 2): an
+        // interactive acquire must succeed immediately, without parking.
+        await limiter.acquire(.interactive)
+
+        // The fifth background acquire is still parked — interactive slots
+        // are independent of the background cap.
+        #expect(await fifthBackgroundAcquired.entries.isEmpty)
+
+        // Releasing one of the four running background slots must let the
+        // parked background acquire through.
+        await limiter.release(.background)
+        _ = await fifthBackgroundTask.value
+        #expect(await fifthBackgroundAcquired.entries == ["acquired"])
+    }
+
+    @Test func interactiveWaiterQueueJumpsAheadOfParkedBackgroundWaiter() async throws {
+        let limiter = ConcurrencyLimiter(limit: 6)
+        let log = OrderLog()
+
+        // Fill all six slots with a mix of tiers.
+        for _ in 0..<4 { await limiter.acquire(.background) }
+        for _ in 0..<2 { await limiter.acquire(.interactive) }
+
+        // Park a background waiter first, then an interactive waiter.
+        let backgroundWaiterStarted = OrderLog()
+        let backgroundTask = Task {
+            await backgroundWaiterStarted.append("started")
+            await limiter.acquire(.background)
+            await log.append("background")
+        }
+        while await backgroundWaiterStarted.entries.isEmpty {
+            await Task.yield()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        let interactiveWaiterStarted = OrderLog()
+        let interactiveTask = Task {
+            await interactiveWaiterStarted.append("started")
+            await limiter.acquire(.interactive)
+            await log.append("interactive")
+        }
+        while await interactiveWaiterStarted.entries.isEmpty {
+            await Task.yield()
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(await log.entries.isEmpty)
+
+        // Release a single slot: the interactive waiter must resume first
+        // even though the background waiter parked earlier.
+        await limiter.release(.interactive)
+        _ = await interactiveTask.value
+
+        #expect(await log.entries == ["interactive"])
+
+        // Clean up the still-parked background waiter so the test doesn't
+        // leak a task: release one of the four running background holders
+        // (activeBackground drops below the cap) to let it through.
+        await limiter.release(.background)
+        _ = await backgroundTask.value
+        #expect(await log.entries == ["interactive", "background"])
+    }
 }

@@ -102,12 +102,12 @@ public struct GitClient: Sendable {
 
     /// `git -C <repo> pull`
     public func pull(in repo: URL) async throws {
-        try await runVoid(["pull"], in: repo)
+        try await runVoid(["pull"], in: repo, timeout: Self.syncTimeout)
     }
 
     /// `git -C <repo> push`
     public func push(in repo: URL) async throws {
-        try await runVoid(["push"], in: repo)
+        try await runVoid(["push"], in: repo, timeout: Self.syncTimeout)
     }
 
     /// `git push`, with automatic recovery from a non-fast-forward
@@ -122,24 +122,37 @@ public struct GitClient: Sendable {
     /// the pull never actually started a rebase.
     public func pushWithAutoRebase(in repo: URL) async throws -> PushOutcome {
         do {
-            try await runVoid(["push"], in: repo)
+            try await runVoid(["push"], in: repo, timeout: Self.syncTimeout)
             return .pushed
         } catch let error as GitError where error.isNonFastForwardPushRejection {
             do {
-                try await runVoid(["pull", "--rebase", "--autostash"], in: repo)
+                try await runVoid(["pull", "--rebase", "--autostash"], in: repo, timeout: Self.syncTimeout)
             } catch let pullError as GitError {
                 try? await runVoid(["rebase", "--abort"], in: repo)
                 throw pullError
             }
-            try await runVoid(["push"], in: repo)
+            try await runVoid(["push"], in: repo, timeout: Self.syncTimeout)
             return .rebasedAndPushed
         }
     }
 
     /// `git -C <repo> fetch`
-    public func fetch(in repo: URL) async throws {
-        try await runVoid(["fetch"], in: repo)
+    ///
+    /// `priority` defaults to `.interactive`; background callers (auto-fetch,
+    /// integrations polling) pass `.background` so they queue behind
+    /// interactive work rather than competing with it for limiter slots.
+    public func fetch(in repo: URL, priority: SubprocessPriority = .interactive) async throws {
+        try await runVoid(["fetch"], in: repo, priority: priority, timeout: Self.fetchTimeout)
     }
+
+    // MARK: - Timeouts
+    //
+    // Network operations get a deadline so a hung remote can't wedge a
+    // subprocess (and its limiter slot) forever; local operations
+    // (status/log/stage/commit/etc.) have no timeout.
+
+    static let fetchTimeout: Duration = .seconds(90)
+    static let syncTimeout: Duration = .seconds(300)
 
     // MARK: - Private helpers
 
@@ -168,19 +181,40 @@ public struct GitClient: Sendable {
 
     /// Runs `git -C <repo> <arguments>` and throws `GitError` on any non-zero
     /// exit, carrying the full command string and stderr verbatim.
+    ///
+    /// A timed-out result always throws — unlike `outputTruncated`, a
+    /// timeout is never treated as success — with a `GitError.stderr` that
+    /// leads with "timed out after \(seconds)s" followed by the child's own
+    /// stderr (if any) on a new line.
     private func run(
         _ arguments: [String],
         in repo: URL,
         environment: [String: String] = [:],
-        maxOutputBytes: Int? = nil
+        maxOutputBytes: Int? = nil,
+        priority: SubprocessPriority = .interactive,
+        timeout: Duration? = nil
     ) async throws -> ProcessResult {
         let fullArguments = ["-C", repo.path] + arguments
         let result = try await ProcessRunner.run(
             gitPath,
             arguments: fullArguments,
             environment: environment,
-            maxOutputBytes: maxOutputBytes
+            maxOutputBytes: maxOutputBytes,
+            priority: priority,
+            timeout: timeout
         )
+        if result.timedOut {
+            let seconds = timeout?.components.seconds ?? 0
+            var stderr = "timed out after \(seconds)s"
+            if !result.stderr.isEmpty {
+                stderr += "\n" + result.stderr
+            }
+            throw GitError(
+                command: commandString(fullArguments),
+                exitCode: result.exitCode,
+                stderr: stderr
+            )
+        }
         // `ProcessRunner` enforces `maxOutputBytes` by SIGTERM-ing the child,
         // which makes `terminationStatus` a nonzero signal exit (15) rather
         // than 0 — that is expected, not a failure. Only `status` passes
@@ -197,8 +231,13 @@ public struct GitClient: Sendable {
     }
 
     /// Convenience for commands whose stdout the caller never inspects.
-    private func runVoid(_ arguments: [String], in repo: URL) async throws {
-        _ = try await run(arguments, in: repo)
+    private func runVoid(
+        _ arguments: [String],
+        in repo: URL,
+        priority: SubprocessPriority = .interactive,
+        timeout: Duration? = nil
+    ) async throws {
+        _ = try await run(arguments, in: repo, priority: priority, timeout: timeout)
     }
 
     private func commandString(_ arguments: [String]) -> String {
