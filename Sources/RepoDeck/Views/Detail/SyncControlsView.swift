@@ -29,6 +29,13 @@ struct SyncControlsView: View {
             }
             .disabled(vm.isBusy)
 
+            Button {
+                Task { await vm.stashPush(message: nil, includeUntracked: true) }
+            } label: {
+                Label("Stash", systemImage: "tray.and.arrow.down")
+            }
+            .disabled(vm.isBusy || (vm.status?.dirtyCount ?? 0) == 0)
+
             if vm.isBusy {
                 ProgressView()
                     .controlSize(.small)

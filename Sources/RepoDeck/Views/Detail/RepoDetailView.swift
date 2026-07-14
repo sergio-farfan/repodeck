@@ -34,6 +34,7 @@ struct RepoDetailView: View {
         .navigationTitle(vm.repo.name)
         .task(id: vm.id) {
             await vm.refreshLog()
+            await vm.refreshStashes()
         }
     }
 }

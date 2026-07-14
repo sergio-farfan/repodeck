@@ -2,8 +2,9 @@ import RepoDeckKit
 import SwiftUI
 
 /// Grouped list of a repo's pending changes: merge conflicts, staged,
-/// unstaged, and untracked, each section shown only when non-empty. Per-file
-/// actions and "Stage All" delegate to `RepoViewModel`.
+/// unstaged, and untracked, each section shown only when non-empty, plus a
+/// trailing Stashes section. Per-file actions and "Stage All" delegate to
+/// `RepoViewModel`.
 struct ChangesListView: View {
     @Environment(\.theme) private var theme
     let vm: RepoViewModel
@@ -15,7 +16,11 @@ struct ChangesListView: View {
             }
 
             if let status = vm.status {
-                if status.changes.isEmpty {
+                // A stash can hold everything a repo's dirty tree had, so an
+                // empty `changes` list doesn't necessarily mean there's
+                // nothing to show here — the list still renders (for its
+                // Stashes section) as long as `vm.stashes` isn't empty too.
+                if status.changes.isEmpty && vm.stashes.isEmpty {
                     ContentUnavailableView("No Changes", systemImage: "checkmark.circle")
                 } else {
                     changesList
@@ -65,6 +70,9 @@ struct ChangesListView: View {
                         FileChangeRow(change: change, vm: vm, action: .stage)
                     }
                 }
+            }
+            if !vm.stashes.isEmpty {
+                StashSection(vm: vm)
             }
         }
     }

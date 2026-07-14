@@ -162,6 +162,41 @@ public struct GitClient: Sendable {
         try await runVoid(["fetch"], in: repo, priority: priority, timeout: Self.fetchTimeout)
     }
 
+    // MARK: - Stash
+
+    /// `git -C <repo> stash list -z --format=%gd%x1f%gs%x1f%cI` -> `StashParser.parse`
+    public func stashList(in repo: URL) async throws -> [StashEntry] {
+        let result = try await run(["stash", "list", "-z", "--format=\(Self.stashFormat)"], in: repo)
+        return StashParser.parse(String(decoding: result.stdout, as: UTF8.self))
+    }
+
+    /// `git -C <repo> stash push [--include-untracked] [-m <message>]`
+    public func stashPush(message: String?, includeUntracked: Bool, in repo: URL) async throws {
+        var arguments = ["stash", "push"]
+        if includeUntracked {
+            arguments.append("--include-untracked")
+        }
+        if let message {
+            arguments += ["-m", message]
+        }
+        try await runVoid(arguments, in: repo)
+    }
+
+    /// `git -C <repo> stash apply stash@{index}`
+    public func stashApply(_ index: Int, in repo: URL) async throws {
+        try await runVoid(["stash", "apply", Self.stashSelector(index)], in: repo)
+    }
+
+    /// `git -C <repo> stash pop stash@{index}`
+    public func stashPop(_ index: Int, in repo: URL) async throws {
+        try await runVoid(["stash", "pop", Self.stashSelector(index)], in: repo)
+    }
+
+    /// `git -C <repo> stash drop stash@{index}`
+    public func stashDrop(_ index: Int, in repo: URL) async throws {
+        try await runVoid(["stash", "drop", Self.stashSelector(index)], in: repo)
+    }
+
     // MARK: - Undo snapshots
     //
     // One-level undo for the two operations where RepoDeck itself rewrites
@@ -252,6 +287,18 @@ public struct GitClient: Sendable {
     /// Pretty-format shared by `log` and `searchLog`, kept in exactly one
     /// place so both stay in lockstep with `LogParser`'s field layout.
     private static let logFormat = "%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%D%x1e"
+
+    /// Format for `stashList`, kept in lockstep with `StashParser`'s field
+    /// layout. Deliberately has no `%x1e` — `stashList` passes `-z`, which
+    /// NUL-terminates each record itself; `%x1e` is only needed for `log`,
+    /// which has no equivalent `-z` record terminator.
+    private static let stashFormat = "%gd%x1f%gs%x1f%cI"
+
+    /// `stash@{<index>}` — the selector `stashApply`/`stashPop`/`stashDrop`
+    /// pass on argv.
+    private static func stashSelector(_ index: Int) -> String {
+        "stash@{\(index)}"
+    }
 
     /// Runs a `git log`-shaped `arguments` list and parses the shared
     /// pretty-format output with `LogParser`.

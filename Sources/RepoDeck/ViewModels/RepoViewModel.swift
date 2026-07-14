@@ -28,6 +28,9 @@ final class RepoViewModel: @MainActor Identifiable {
     var commitMessage: String = ""
     /// Populated by `refreshLog()`; rendered by `HistoryListView`.
     var commits: [Commit] = []
+    /// Populated by `refreshStashes()`; rendered by `StashSection` at the
+    /// bottom of `ChangesListView`.
+    var stashes: [StashEntry] = []
     /// Free-text history search bound to `HistoryListView`'s search field.
     /// Trimmed empty (the default) means "no filter" — `refreshLog()` falls
     /// back to the full `client.log(in:)`.
@@ -189,6 +192,15 @@ final class RepoViewModel: @MainActor Identifiable {
         }
     }
 
+    /// Refreshes `stashes` from `git stash list`. Passive like
+    /// `refreshStatus`: no `isBusy`, no `actionError` banner on failure — a
+    /// stale list beats a blank one, so a failure just leaves `stashes`
+    /// untouched. Called from `RepoDetailView.task(id:)` alongside
+    /// `refreshLog()`, and at the tail of every stash mutation below.
+    func refreshStashes() async {
+        stashes = (try? await client.stashList(in: repo.path)) ?? stashes
+    }
+
     /// Debounces `historyQuery` edits: cancels any prior pending search in
     /// the shared `historySearchTask` slot, waits 300ms, then runs
     /// `refreshLog()` — unless a newer keystroke or field change cancelled
@@ -324,6 +336,38 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Fetches from upstream without merging — updates ahead/behind counts.
     func fetch() async {
         await performAction { try await self.client.fetch(in: self.repo.path) }
+    }
+
+    /// Stashes the current changes. `message` is optional (`git stash push`
+    /// falls back to its own default subject); `includeUntracked` maps to
+    /// `--include-untracked`. `performAction` already refreshes `status`
+    /// afterward; this additionally refreshes `stashes` so the new entry
+    /// shows up immediately.
+    func stashPush(message: String?, includeUntracked: Bool) async {
+        await performAction {
+            try await self.client.stashPush(message: message, includeUntracked: includeUntracked, in: self.repo.path)
+        }
+        await refreshStashes()
+    }
+
+    /// Applies `stash@{index}` without dropping it.
+    func stashApply(_ index: Int) async {
+        await performAction { try await self.client.stashApply(index, in: self.repo.path) }
+        await refreshStashes()
+    }
+
+    /// Applies `stash@{index}` and drops it on success.
+    func stashPop(_ index: Int) async {
+        await performAction { try await self.client.stashPop(index, in: self.repo.path) }
+        await refreshStashes()
+    }
+
+    /// Drops `stash@{index}` without applying it. Confirmation lives in the
+    /// view (`StashSection`'s `.confirmationDialog`) — this method just does
+    /// the drop.
+    func stashDrop(_ index: Int) async {
+        await performAction { try await self.client.stashDrop(index, in: self.repo.path) }
+        await refreshStashes()
     }
 
     /// Background fetch on the scheduler's behalf: quietly refreshes remote
