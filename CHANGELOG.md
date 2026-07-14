@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Changed files now always open in TextEdit (both double-click and the "Open in Editor" context menu item). Binary or deleted files no longer offer an open action.
+- Double-clicking a file now flashes the row with the accent color as open-acknowledgment feedback.
 
 ## [1.2.0] - 2026-07-08
 

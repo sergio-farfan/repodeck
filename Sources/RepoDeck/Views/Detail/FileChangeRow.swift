@@ -31,6 +31,10 @@ struct FileChangeRow: View {
     let vm: RepoViewModel
     let action: Action?
 
+    /// Drives the brief accent flash acknowledging a successful double-click
+    /// open. Set instantly, then faded out by `flashRow()`.
+    @State private var isFlashing = false
+
     /// TextEdit's fixed system location — same hardcoded-path convention as
     /// Terminal in RepoRowView.
     private static let textEditURL = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
@@ -83,6 +87,10 @@ struct FileChangeRow: View {
                 .help(action.help)
             }
         }
+        .background(
+            theme.accent.opacity(isFlashing ? 0.25 : 0),
+            in: RoundedRectangle(cornerRadius: 4)
+        )
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             openInTextEdit()
@@ -104,6 +112,20 @@ struct FileChangeRow: View {
             configuration: NSWorkspace.OpenConfiguration(),
             completionHandler: nil
         )
+        flashRow()
+    }
+
+    /// Shows the highlight immediately, holds it briefly so it registers,
+    /// then fades it out. Two steps (instant on, animated off) because a
+    /// same-transaction on+off would coalesce into no visible change.
+    private func flashRow() {
+        isFlashing = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            withAnimation(.easeOut(duration: 0.5)) {
+                isFlashing = false
+            }
+        }
     }
 
     private var fileName: String {
