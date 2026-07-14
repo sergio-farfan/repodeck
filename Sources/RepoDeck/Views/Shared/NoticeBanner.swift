@@ -4,13 +4,8 @@ import SwiftUI
 /// shown when an action succeeded but did something worth surfacing (e.g.
 /// an auto-rebase before push). Same chrome and placement as `ErrorBanner`,
 /// accent-tinted instead of red. Collapses to nothing when `notice` is nil.
-///
-/// `trailingAction`, if provided, renders a bordered button (its `title`)
-/// before the dismiss X — e.g. an inline call to action related to the
-/// notice. Defaults to `nil`, so existing call sites are unaffected.
 struct NoticeBanner: View {
     @Binding var notice: String?
-    var trailingAction: (title: String, action: () -> Void)? = nil
 
     var body: some View {
         if let notice {
@@ -23,12 +18,6 @@ struct NoticeBanner: View {
                     .textSelection(.enabled)
 
                 Spacer(minLength: 8)
-
-                if let trailingAction {
-                    Button(trailingAction.title, action: trailingAction.action)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
 
                 Button {
                     self.notice = nil

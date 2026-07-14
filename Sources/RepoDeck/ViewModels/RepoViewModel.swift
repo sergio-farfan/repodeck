@@ -256,11 +256,15 @@ final class RepoViewModel: @MainActor Identifiable {
     func pull() async {
         await performAction(refreshingLog: true) {
             let snapshot = try await self.client.writeUndoSnapshot(in: self.repo.path)
+            // `writeUndoSnapshot` prunes any prior undo ref, so a record from
+            // an earlier sync now points at a deleted ref. Clear it up front,
+            // before the pull — which may throw and skip the promote/discard
+            // below, leaving the stale record behind otherwise.
+            self.undoRecord = nil
             try await self.client.pull(in: self.repo.path)
             let postOpHead = try await self.client.headOID(in: self.repo.path)
             if postOpHead == snapshot.oid {
                 await self.client.discardUndoSnapshot(snapshot, in: self.repo.path)
-                self.undoRecord = nil
             } else {
                 self.undoRecord = UndoRecord(snapshot: snapshot, postOpHead: postOpHead, description: "pull")
             }
@@ -282,6 +286,10 @@ final class RepoViewModel: @MainActor Identifiable {
         if autoRebaseOnRejectedPush {
             await performAction(refreshingLog: true) {
                 let snapshot = try await self.client.writeUndoSnapshot(in: self.repo.path)
+                // See `pull()`: the snapshot write prunes any prior undo ref,
+                // so clear the now-stale record before the push, which may
+                // throw before the promote/discard below runs.
+                self.undoRecord = nil
                 let outcome = try await self.client.pushWithAutoRebase(in: self.repo.path)
                 if outcome == .rebasedAndPushed {
                     self.actionNotice = "Push rejected — rebased onto \(self.status?.upstream ?? "remote") and pushed"
