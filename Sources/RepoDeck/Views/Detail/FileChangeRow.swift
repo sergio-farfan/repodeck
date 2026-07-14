@@ -88,14 +88,9 @@ struct FileChangeRow: View {
             openInTextEdit()
         }
         .contextMenu {
-            if let url = editableFileURL {
+            if editableFileURL != nil {
                 Button("Open in Editor") {
-                    NSWorkspace.shared.open(
-                        [url],
-                        withApplicationAt: Self.textEditURL,
-                        configuration: NSWorkspace.OpenConfiguration(),
-                        completionHandler: nil
-                    )
+                    openInTextEdit()
                 }
             }
         }
