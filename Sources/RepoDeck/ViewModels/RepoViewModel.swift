@@ -63,12 +63,40 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Set by a failed `autoFetch()`; cleared on the next successful one.
     /// Surfaced nowhere yet — kept for debugging and a future indicator.
     var lastAutoFetchError: String?
+    /// The current branch's open PR + CI rollup, via `gh`. Populated by
+    /// `refreshPRInfo(using:)`; nil means "nothing to show" whether that's
+    /// because gh is unavailable, there's no open PR, or the last refresh
+    /// failed — this is a read-only, entirely optional feature, so every
+    /// one of those cases renders identically (no badge). Rendered as a
+    /// `PRBadgeView` by `SyncControlsView` only when non-nil.
+    var prInfo: PullRequestInfo?
+    /// When `prInfo` was last (successfully or unsuccessfully) refreshed —
+    /// the TTL clock `refreshPRInfo(using:)` checks before calling `gh`
+    /// again.
+    var prInfoFetchedAt: Date?
+    /// The branch `prInfo`/`prInfoFetchedAt` correspond to. The TTL only
+    /// applies while the branch is unchanged: a branch switch (external
+    /// `git checkout`, etc.) makes any cached `prInfo` *wrong*, not merely
+    /// stale, so `refreshPRInfo(using:)` drops it and bypasses the TTL when
+    /// this no longer matches `status?.branch`. Without this a branch change
+    /// within the TTL window would keep the previous branch's PR badge —
+    /// and clicking it would open the wrong PR.
+    private var prInfoBranch: String?
 
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
     /// that arrives mid-refresh is folded into a single trailing refresh
     /// instead of piling up concurrent invocations.
     private var refreshInFlight = false
     private var refreshQueued = false
+
+    /// Own in-flight guard for `refreshPRInfo(using:)` — deliberately not
+    /// `isBusy`/`performAction`: a slow or failed `gh` call must never
+    /// disable the git action buttons or paint `actionError`'s banner for
+    /// what is an entirely optional, best-effort integration.
+    private var isRefreshingPR = false
+    /// How long a successful-or-not `prInfo` fetch is considered fresh
+    /// before `refreshPRInfo(using:)` will call `gh` again (unless `force`).
+    private static let prInfoTTL: TimeInterval = 300
 
     /// The in-flight debounced/immediate search reschedule, if any.
     /// Cancelled and replaced by every call to `scheduleHistorySearch()` or
@@ -201,6 +229,50 @@ final class RepoViewModel: @MainActor Identifiable {
         stashes = (try? await client.stashList(in: repo.path)) ?? stashes
     }
 
+    /// Refreshes `prInfo` from `gh pr list` for the current branch. Passive
+    /// like `refreshStashes`/`refreshStatus`: no `isBusy`, no
+    /// `actionError` — a failed or slow `gh` call just clears `prInfo`
+    /// (nothing shows), it never blocks git actions or paints a banner for
+    /// what is an entirely optional integration. Own in-flight guard
+    /// (`isRefreshingPR`) so a slow call can't be piled onto by a second.
+    ///
+    /// Skipped when the last fetch is still within `prInfoTTL` FOR THE SAME
+    /// branch, unless `force` (used by `push()`, where a push can change CI
+    /// state right away). A branch change bypasses the TTL and drops the
+    /// now-wrong cached `prInfo` up front, so a different branch's PR badge
+    /// is never left showing. No branch (`status?.branch` nil — e.g.
+    /// detached HEAD, or `status` itself not yet loaded) clears everything
+    /// and returns without touching `gh`.
+    func refreshPRInfo(using gh: GhClient, force: Bool = false) async {
+        guard let branch = status?.branch else {
+            prInfo = nil
+            prInfoBranch = nil
+            return
+        }
+        // A branch switch invalidates the cached PR outright — clear it now
+        // (not just after the awaited fetch) so a stale/wrong badge never
+        // lingers, and never honor the TTL across a branch change.
+        let branchChanged = branch != prInfoBranch
+        if branchChanged {
+            prInfo = nil
+            prInfoBranch = nil
+        }
+        guard !isRefreshingPR else { return }
+        if !force, !branchChanged, let prInfoFetchedAt,
+           Date().timeIntervalSince(prInfoFetchedAt) < Self.prInfoTTL {
+            return
+        }
+        isRefreshingPR = true
+        defer { isRefreshingPR = false }
+        do {
+            prInfo = try await gh.pullRequest(forBranch: branch, in: repo.path)
+        } catch {
+            prInfo = nil
+        }
+        prInfoBranch = branch
+        prInfoFetchedAt = Date()
+    }
+
     /// Debounces `historyQuery` edits: cancels any prior pending search in
     /// the shared `historySearchTask` slot, waits 300ms, then runs
     /// `refreshLog()` — unless a newer keystroke or field change cancelled
@@ -294,7 +366,13 @@ final class RepoViewModel: @MainActor Identifiable {
     /// when the toggle is actually on, so a plain push never pays for a
     /// snapshot it can't use. A clean `.pushed` outcome means no rebase
     /// happened, so the snapshot is noise and is discarded immediately.
-    func push() async {
+    ///
+    /// `gh`, when non-nil, is used at the tail — after either branch — to
+    /// force a fresh `refreshPRInfo`: a push can change the branch's CI
+    /// state (new commits landed) or turn a fresh push into a PR's first
+    /// CI run, so the 5-minute TTL is bypassed here. Callers pass nil when
+    /// `AppModel.isGhAvailable` is false, which skips the refresh entirely.
+    func push(using gh: GhClient? = nil) async {
         if autoRebaseOnRejectedPush {
             await performAction(refreshingLog: true) {
                 let snapshot = try await self.client.writeUndoSnapshot(in: self.repo.path)
@@ -313,6 +391,9 @@ final class RepoViewModel: @MainActor Identifiable {
             }
         } else {
             await performAction { try await self.client.push(in: self.repo.path) }
+        }
+        if actionError == nil, let gh {
+            await refreshPRInfo(using: gh, force: true)
         }
     }
 

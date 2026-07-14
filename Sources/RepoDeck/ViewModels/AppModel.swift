@@ -64,6 +64,18 @@ final class AppModel {
 
     let client = GitClient()
 
+    /// The `gh` binary, if found on this machine — nil disables the PR/CI
+    /// integration entirely (see `isGhAvailable`). Discovered once at
+    /// launch; `gh` isn't expected to appear or disappear mid-session.
+    let gh: GhClient?
+    /// Whether `gh` is both installed AND authenticated. Resolved once, off
+    /// the main actor, by a one-shot `gh auth status` kicked off in `init`
+    /// (nil `gh` short-circuits to `false` without spawning anything).
+    /// Every PR/CI call site — `RepoDetailView.task(id:)` and `push()` —
+    /// gates on this rather than re-checking auth per call, per the brief's
+    /// "runs once per launch" contract for `isAuthenticated()`.
+    private(set) var isGhAvailable = false
+
     private let watcher = RepoWatcher()
     private var watcherTask: Task<Void, Never>?
     private var lastRescanAt: Date?
@@ -83,6 +95,11 @@ final class AppModel {
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
         trackedFolders = paths.map { URL(fileURLWithPath: $0) }
+        // Assigned before any other stored property below touches `self`
+        // (Swift requires every `let` to be set before `self` escapes) —
+        // the auth-check `Task` that uses this value is kicked off later,
+        // once every property is initialized.
+        gh = GhClient.discover()
 
         // Migration inputs are read unconditionally (cheap, and needed by
         // both the corrupt- and absent-key branches below); the legacy keys
@@ -126,6 +143,16 @@ final class AppModel {
         // the scheduler here.
         autoFetchScheduler = AutoFetchScheduler(model: self)
         autoFetchScheduler?.start()
+
+        // One-shot auth check, off the main actor while it awaits the `gh`
+        // subprocess. Captures `gh` by value (a `Sendable` struct) rather
+        // than reading `self.gh` inside the task, purely for clarity — it
+        // reads identically either way since `gh` never changes after init.
+        let gh = gh
+        Task { [weak self] in
+            let authenticated = await gh?.isAuthenticated() ?? false
+            self?.isGhAvailable = authenticated
+        }
     }
 
     isolated deinit {

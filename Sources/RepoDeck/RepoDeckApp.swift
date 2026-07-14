@@ -33,6 +33,7 @@ struct RepoDeckApp: App {
         // Auto-adds the ⌘, "Settings…" menu item.
         Settings {
             SettingsView()
+                .environment(model)
                 .environment(theme)
                 .environment(\.theme, Theme(settings: theme))
                 // preferredColorScheme does not cross window boundaries, so

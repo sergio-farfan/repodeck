@@ -195,7 +195,10 @@ struct CommandPaletteView: View {
                 close()
             }),
             PaletteItem(id: "selected-push", kind: .action, title: "Push — \(name)", subtitle: nil, run: {
-                Task { await vm.push() }
+                // Thread the gh handle through exactly as the SyncControls
+                // Push button does, so a palette-driven push also refreshes
+                // the PR/CI badge afterward (nil when gh is unavailable).
+                Task { await vm.push(using: model.isGhAvailable ? model.gh : nil) }
                 close()
             }),
             PaletteItem(id: "selected-fetch", kind: .action, title: "Fetch — \(name)", subtitle: nil, run: {

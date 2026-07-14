@@ -4,6 +4,7 @@ import SwiftUI
 /// ahead/behind readout for the current upstream.
 struct SyncControlsView: View {
     @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var model
     let vm: RepoViewModel
 
     var body: some View {
@@ -16,7 +17,7 @@ struct SyncControlsView: View {
             .disabled(vm.isBusy)
 
             Button {
-                Task { await vm.push() }
+                Task { await vm.push(using: model.isGhAvailable ? model.gh : nil) }
             } label: {
                 Label("Push", systemImage: "arrow.up")
             }
@@ -44,6 +45,9 @@ struct SyncControlsView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 2) {
+                if let prInfo = vm.prInfo {
+                    PRBadgeView(info: prInfo)
+                }
                 if let record = vm.undoRecord {
                     Button {
                         Task { await vm.undoLastSync() }

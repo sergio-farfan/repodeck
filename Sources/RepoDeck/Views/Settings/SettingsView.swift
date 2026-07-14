@@ -6,6 +6,7 @@ import SwiftUI
 /// existing leaf views is Task 3.
 struct SettingsView: View {
     @Environment(ThemeSettings.self) private var settings
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         @Bindable var settings = settings
@@ -53,6 +54,13 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Integrations") {
+                LabeledContent("GitHub CLI (gh)") {
+                    Label(ghStatusText, systemImage: ghStatusSymbol)
+                        .foregroundStyle(model.isGhAvailable ? .green : .secondary)
+                }
+            }
+
             Section {
                 Button("Reset to Defaults") {
                     settings.resetToDefaults()
@@ -73,6 +81,20 @@ struct SettingsView: View {
             Text("git commit -m \"fix\"")
                 .font(theme.mono(theme.baseSize))
         }
+    }
+
+    /// "Found and authenticated" / "Found, not signed in (run gh auth
+    /// login)" / "Not installed" — the only three states `AppModel` can
+    /// resolve `gh` into (`model.gh == nil` covers "not installed";
+    /// `isGhAvailable` distinguishes the other two).
+    private var ghStatusText: String {
+        guard model.gh != nil else { return "Not installed" }
+        return model.isGhAvailable ? "Found and authenticated" : "Found, not signed in (run gh auth login)"
+    }
+
+    private var ghStatusSymbol: String {
+        guard model.gh != nil else { return "xmark.circle" }
+        return model.isGhAvailable ? "checkmark.circle.fill" : "exclamationmark.circle"
     }
 
     private var uiFontFamilies: [String] {
