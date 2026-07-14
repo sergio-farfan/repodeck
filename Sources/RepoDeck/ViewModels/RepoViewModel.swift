@@ -2,6 +2,17 @@ import Foundation
 import Observation
 import RepoDeckKit
 
+/// One-level undo state for the last `pull()` or auto-rebase `push()`:
+/// the pre-operation `UndoSnapshot` plus the HEAD the operation landed on
+/// (`postOpHead`), so `undoLastSync()` can guard against the repo having
+/// moved on again before restoring.
+struct UndoRecord {
+    let snapshot: UndoSnapshot
+    let postOpHead: String
+    /// e.g. "pull" / "auto-rebase push" — used in the Undo button's label.
+    let description: String
+}
+
 /// View model for a single tracked repo: owns its live status and the
 /// coalesced refresh that keeps it current.
 @MainActor
@@ -39,6 +50,13 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Cleared at the start of the next action and on manual dismiss.
     /// Rendered by `NoticeBanner` in `RepoDetailView`.
     var actionNotice: String?
+    /// One-level undo for the last `pull()` or auto-rebase `push()`, if
+    /// its snapshot is still live (see `pull()`/`push()` for when it's
+    /// written vs. discarded as noise). `undoLastSync()` consumes and
+    /// clears it on success; a later sync operation simply replaces it —
+    /// `writeUndoSnapshot`'s own pruning handles the superseded ref.
+    /// Rendered as an Undo button by `SyncControlsView` whenever non-nil.
+    var undoRecord: UndoRecord?
     /// Set by a failed `autoFetch()`; cleared on the next successful one.
     /// Surfaced nowhere yet — kept for debugging and a future indicator.
     var lastAutoFetchError: String?
@@ -230,9 +248,23 @@ final class RepoViewModel: @MainActor Identifiable {
     }
 
     /// Pulls from upstream, then refreshes status and log — new commits may
-    /// have arrived.
+    /// have arrived. Rewrites local history (a merge or fast-forward moves
+    /// HEAD), so it always snapshots first via `writeUndoSnapshot`; if the
+    /// pull turned out to be a no-op (HEAD didn't move), the snapshot is
+    /// noise and is discarded immediately rather than left around as a
+    /// dead undo target.
     func pull() async {
-        await performAction(refreshingLog: true) { try await self.client.pull(in: self.repo.path) }
+        await performAction(refreshingLog: true) {
+            let snapshot = try await self.client.writeUndoSnapshot(in: self.repo.path)
+            try await self.client.pull(in: self.repo.path)
+            let postOpHead = try await self.client.headOID(in: self.repo.path)
+            if postOpHead == snapshot.oid {
+                await self.client.discardUndoSnapshot(snapshot, in: self.repo.path)
+                self.undoRecord = nil
+            } else {
+                self.undoRecord = UndoRecord(snapshot: snapshot, postOpHead: postOpHead, description: "pull")
+            }
+        }
     }
 
     /// Pushes local commits upstream, refreshing status for the new
@@ -240,15 +272,44 @@ final class RepoViewModel: @MainActor Identifiable {
     /// non-fast-forward rejection triggers `git pull --rebase --autostash`
     /// and a single retry — and since that can pull new commits in, the log
     /// is refreshed too in that mode.
+    ///
+    /// That rebase-and-retry is the only branch of `push()` that rewrites
+    /// local history, so it's the only branch that snapshots — and only
+    /// when the toggle is actually on, so a plain push never pays for a
+    /// snapshot it can't use. A clean `.pushed` outcome means no rebase
+    /// happened, so the snapshot is noise and is discarded immediately.
     func push() async {
         if autoRebaseOnRejectedPush {
             await performAction(refreshingLog: true) {
-                if try await self.client.pushWithAutoRebase(in: self.repo.path) == .rebasedAndPushed {
+                let snapshot = try await self.client.writeUndoSnapshot(in: self.repo.path)
+                let outcome = try await self.client.pushWithAutoRebase(in: self.repo.path)
+                if outcome == .rebasedAndPushed {
                     self.actionNotice = "Push rejected — rebased onto \(self.status?.upstream ?? "remote") and pushed"
+                    let postOpHead = try await self.client.headOID(in: self.repo.path)
+                    self.undoRecord = UndoRecord(snapshot: snapshot, postOpHead: postOpHead, description: "auto-rebase push")
+                } else {
+                    await self.client.discardUndoSnapshot(snapshot, in: self.repo.path)
                 }
             }
         } else {
             await performAction { try await self.client.push(in: self.repo.path) }
+        }
+    }
+
+    /// Restores HEAD to the last recorded `undoRecord`'s snapshot. No-op if
+    /// there is none. On success, clears `undoRecord` and surfaces a
+    /// confirmation via `actionNotice`; on failure (the moved-on guard, or
+    /// `reset --keep` refusing because the restore would clobber dirty
+    /// work), `undoRecord` is left intact and the failure surfaces through
+    /// the normal `actionError` path instead.
+    func undoLastSync() async {
+        guard let record = undoRecord else { return }
+        await performAction {
+            try await self.client.restoreUndoSnapshot(
+                record.snapshot, expectedHead: record.postOpHead, in: self.repo.path
+            )
+            self.undoRecord = nil
+            self.actionNotice = "Restored to \(String(record.snapshot.oid.prefix(7))). Remote unchanged."
         }
     }
 

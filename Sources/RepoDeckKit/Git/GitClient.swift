@@ -7,6 +7,23 @@ public enum PushOutcome: Sendable, Equatable {
     case rebasedAndPushed
 }
 
+/// A pre-operation HEAD snapshot recorded as a git ref, so it survives gc
+/// and app restarts. Written by `GitClient.writeUndoSnapshot(in:)` before
+/// the two operations where RepoDeck itself rewrites local history —
+/// `pull()` and the auto-rebase branch of `pushWithAutoRebase` — and
+/// consumed by `GitClient.restoreUndoSnapshot(_:expectedHead:in:)`.
+public struct UndoSnapshot: Sendable, Equatable {
+    /// "refs/repodeck/undo/<unix-ts>"
+    public let refName: String
+    /// Full HEAD OID at snapshot time.
+    public let oid: String
+
+    public init(refName: String, oid: String) {
+        self.refName = refName
+        self.oid = oid
+    }
+}
+
 /// Stateless façade over the git CLI: every view model calls into `GitClient`
 /// rather than shelling out directly. Composes `ProcessRunner` (subprocess
 /// execution), `PorcelainParser` (status), and `LogParser` (log) into typed
@@ -143,6 +160,82 @@ public struct GitClient: Sendable {
     /// interactive work rather than competing with it for limiter slots.
     public func fetch(in repo: URL, priority: SubprocessPriority = .interactive) async throws {
         try await runVoid(["fetch"], in: repo, priority: priority, timeout: Self.fetchTimeout)
+    }
+
+    // MARK: - Undo snapshots
+    //
+    // One-level undo for the two operations where RepoDeck itself rewrites
+    // local history: `pull()` and the auto-rebase branch of
+    // `pushWithAutoRebase`. A snapshot is a git ref, not in-memory state, so
+    // it survives `git gc` and app restarts. Exactly one snapshot exists per
+    // repo at a time — every write prunes all prior `refs/repodeck/undo/*`
+    // first — so there is never more than one ref to clean up or reason
+    // about.
+
+    /// Full OID of HEAD. `git rev-parse HEAD`.
+    public func headOID(in repo: URL) async throws -> String {
+        let result = try await run(["rev-parse", "HEAD"], in: repo)
+        return String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Prunes ALL existing `refs/repodeck/undo/*` refs (exactly one
+    /// snapshot per repo, newest wins), then records HEAD under a fresh
+    /// ref — `refs/repodeck/undo/<unix-ts>` — via `git update-ref`, where
+    /// the timestamp is seconds since epoch at the moment of the call.
+    public func writeUndoSnapshot(in repo: URL) async throws -> UndoSnapshot {
+        try await pruneUndoSnapshots(in: repo)
+        let oid = try await headOID(in: repo)
+        let refName = "refs/repodeck/undo/\(Int(Date().timeIntervalSince1970))"
+        try await runVoid(["update-ref", refName, oid], in: repo)
+        return UndoSnapshot(refName: refName, oid: oid)
+    }
+
+    /// Restores HEAD to `snapshot` with `git reset --keep <oid>` — `--keep`
+    /// (never `--hard`) preserves uncommitted work, and git itself refuses
+    /// with a non-zero exit if the reset would clobber local modifications
+    /// to a file that differs between the snapshot and current HEAD.
+    ///
+    /// Guard: before touching anything, compares current HEAD to
+    /// `expectedHead` (the HEAD the caller observed right after the
+    /// snapshotted operation completed). On mismatch — some other operation
+    /// moved HEAD again since then — throws a `GitError` (stderr
+    /// "repository has moved on since the snapshot", exitCode -1, command
+    /// "git reset --keep") WITHOUT resetting or touching the snapshot ref.
+    ///
+    /// On success, deletes the snapshot ref.
+    public func restoreUndoSnapshot(_ snapshot: UndoSnapshot, expectedHead: String, in repo: URL) async throws {
+        let currentHead = try await headOID(in: repo)
+        guard currentHead == expectedHead else {
+            throw GitError(
+                command: "git reset --keep",
+                exitCode: -1,
+                stderr: "repository has moved on since the snapshot"
+            )
+        }
+        try await runVoid(["reset", "--keep", snapshot.oid], in: repo)
+        await discardUndoSnapshot(snapshot, in: repo)
+    }
+
+    /// Deletes the snapshot ref — best effort, used both after a successful
+    /// restore and when a newer operation supersedes an unused snapshot.
+    /// `git update-ref -d <refName>`; any failure (e.g. the ref is already
+    /// gone) is ignored.
+    public func discardUndoSnapshot(_ snapshot: UndoSnapshot, in repo: URL) async {
+        try? await runVoid(["update-ref", "-d", snapshot.refName], in: repo)
+    }
+
+    /// Deletes every existing `refs/repodeck/undo/*` ref via
+    /// `git for-each-ref` + `update-ref -d`, so `writeUndoSnapshot` never
+    /// leaves more than the one it is about to create.
+    private func pruneUndoSnapshots(in repo: URL) async throws {
+        let result = try await run(["for-each-ref", "--format=%(refname)", "refs/repodeck/undo"], in: repo)
+        let refs = String(decoding: result.stdout, as: UTF8.self)
+            .split(separator: "\n")
+            .map(String.init)
+        for ref in refs {
+            try? await runVoid(["update-ref", "-d", ref], in: repo)
+        }
     }
 
     // MARK: - Timeouts

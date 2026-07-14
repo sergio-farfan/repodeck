@@ -37,6 +37,16 @@ struct SyncControlsView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 2) {
+                if let record = vm.undoRecord {
+                    Button {
+                        Task { await vm.undoLastSync() }
+                    } label: {
+                        Label("Undo \(record.description)", systemImage: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(theme.caption)
+                    .disabled(vm.isBusy)
+                }
                 if let aheadBehindText {
                     Text(aheadBehindText)
                         .font(theme.caption)
