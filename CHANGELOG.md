@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Per-repo **Auto-Rebase on Rejected Push** toggle (right-click a repo in the sidebar): when a push is rejected because the remote has new commits, RepoDeck runs `git pull --rebase --autostash` and retries the push once, surfacing a dismissible notice on success. A conflicting rebase is aborted cleanly, leaving the repo exactly as it was.
 
+### Changed
+
+- Changed files now always open in TextEdit (both double-click and the "Open in Editor" context menu item). Binary or deleted files no longer offer an open action.
+
 ## [1.2.0] - 2026-07-08
 
 ### Added

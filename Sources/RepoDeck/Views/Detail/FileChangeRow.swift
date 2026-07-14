@@ -4,7 +4,8 @@ import SwiftUI
 
 /// A single changed file: status badge, filename, dimmed path context, and an
 /// optional trailing stage/unstage button. Double-click (or the context
-/// menu's "Open in Editor") opens the file in the user's default editor.
+/// menu's "Open in Editor") opens text files in TextEdit; binary and deleted
+/// files offer no open affordance.
 struct FileChangeRow: View {
     enum Action {
         case stage
@@ -29,6 +30,22 @@ struct FileChangeRow: View {
     let change: FileChange
     let vm: RepoViewModel
     let action: Action?
+
+    /// TextEdit's fixed system location — same hardcoded-path convention as
+    /// Terminal in RepoRowView.
+    private static let textEditURL = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+
+    /// The file's on-disk URL when it exists, is readable, and sniffs as
+    /// text — nil suppresses every open affordance (binaries, deleted or
+    /// unreadable files). Does file I/O: reference it only inside the tap
+    /// handler and the context-menu builder (both evaluated on interaction),
+    /// never in the row body itself.
+    private var editableFileURL: URL? {
+        let url = vm.repo.path.appendingPathComponent(change.path)
+        guard let handle = try? FileHandle(forReadingFrom: url),
+              let data = try? handle.read(upToCount: BinarySniffer.sniffLength) else { return nil }
+        return BinarySniffer.isLikelyBinary(data) ? nil : url
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -68,17 +85,30 @@ struct FileChangeRow: View {
         }
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
-            NSWorkspace.shared.open(fileURL)
+            openInTextEdit()
         }
         .contextMenu {
-            Button("Open in Editor") {
-                NSWorkspace.shared.open(fileURL)
+            if let url = editableFileURL {
+                Button("Open in Editor") {
+                    NSWorkspace.shared.open(
+                        [url],
+                        withApplicationAt: Self.textEditURL,
+                        configuration: NSWorkspace.OpenConfiguration(),
+                        completionHandler: nil
+                    )
+                }
             }
         }
     }
 
-    private var fileURL: URL {
-        vm.repo.path.appendingPathComponent(change.path)
+    private func openInTextEdit() {
+        guard let url = editableFileURL else { return }
+        NSWorkspace.shared.open(
+            [url],
+            withApplicationAt: Self.textEditURL,
+            configuration: NSWorkspace.OpenConfiguration(),
+            completionHandler: nil
+        )
     }
 
     private var fileName: String {
