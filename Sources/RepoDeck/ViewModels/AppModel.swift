@@ -76,6 +76,8 @@ final class AppModel {
     /// from the storm-window branch of `handle(_:)`.
     private var isFollowUpScheduled = false
 
+    private var autoFetchScheduler: AutoFetchScheduler?
+
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
         trackedFolders = paths.map { URL(fileURLWithPath: $0) }
@@ -116,9 +118,16 @@ final class AppModel {
                 await self?.handle(event)
             }
         }
+
+        // `self` is fully initialized at this point (same constraint the
+        // watcher task above already satisfies), so it's safe to hand it to
+        // the scheduler here.
+        autoFetchScheduler = AutoFetchScheduler(model: self)
+        autoFetchScheduler?.start()
     }
 
     isolated deinit {
+        autoFetchScheduler?.stop()
         watcherTask?.cancel()
         watcher.stop()
     }

@@ -39,6 +39,9 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Cleared at the start of the next action and on manual dismiss.
     /// Rendered by `NoticeBanner` in `RepoDetailView`.
     var actionNotice: String?
+    /// Set by a failed `autoFetch()`; cleared on the next successful one.
+    /// Surfaced nowhere yet — kept for debugging and a future indicator.
+    var lastAutoFetchError: String?
 
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
     /// that arrives mid-refresh is folded into a single trailing refresh
@@ -252,6 +255,31 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Fetches from upstream without merging — updates ahead/behind counts.
     func fetch() async {
         await performAction { try await self.client.fetch(in: self.repo.path) }
+    }
+
+    /// Background fetch on the scheduler's behalf: quietly refreshes remote
+    /// state. Deliberately does NOT use performAction — a failed background
+    /// fetch (offline, VPN down) must not light the error banner on N repos,
+    /// and must not flip isBusy-driven UI. Failures land in
+    /// `lastAutoFetchError` (surfaced nowhere yet; kept for debugging and a
+    /// future indicator).
+    ///
+    /// Deliberately does not set `isBusy` — it must not disable the user's
+    /// buttons; concurrent-user-action safety comes from git's own index
+    /// locking plus `GIT_OPTIONAL_LOCKS=0` on status, and fetch touching
+    /// only remote-tracking refs. The `!isBusy` guard below avoids piling
+    /// onto an in-flight user action; a user action starting DURING an
+    /// auto-fetch is safe for the same reasons.
+    func autoFetch() async {
+        guard !isBusy, !isMissing else { return }
+        do {
+            try await client.fetch(in: repo.path, priority: .background)
+            lastAutoFetchError = nil
+        } catch {
+            lastAutoFetchError = error.localizedDescription
+            return
+        }
+        await refreshStatus()
     }
 
     /// Shared shape for every mutating action: skip if already busy, mark
