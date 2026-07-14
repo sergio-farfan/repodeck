@@ -29,10 +29,10 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Set by a failed stage/unstage/commit/sync action; cleared on the next
     /// successful action. Rendered by `ErrorBanner` in `RepoDetailView`.
     var actionError: GitError?
-    /// Per-repo policy seeded from `AppModel.autoRebaseRepoIDs` (the
-    /// persisted source of truth): when true, `push()` recovers from a
-    /// non-fast-forward rejection by rebasing onto upstream and retrying
-    /// once.
+    /// Per-repo policy seeded from `AppModel.settings(for:)` (the
+    /// persisted source of truth, via `repoSettingsByID`): when true,
+    /// `push()` recovers from a non-fast-forward rejection by rebasing onto
+    /// upstream and retrying once.
     var autoRebaseOnRejectedPush = false
     /// Info-level counterpart to `actionError`: set when an action succeeded
     /// but did something worth surfacing (an auto-rebase before push).

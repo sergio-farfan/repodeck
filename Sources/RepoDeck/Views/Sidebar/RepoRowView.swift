@@ -80,7 +80,7 @@ struct RepoRowView: View {
         Button {
             model.togglePin(vm.id)
         } label: {
-            if model.pinnedRepoIDs.contains(vm.id) {
+            if model.settings(for: vm.id).isPinned {
                 Label("Unpin", systemImage: "star.slash")
             } else {
                 Label("Pin", systemImage: "star")
@@ -88,7 +88,7 @@ struct RepoRowView: View {
         }
 
         Toggle("Auto-Rebase on Rejected Push", isOn: Binding(
-            get: { model.autoRebaseRepoIDs.contains(vm.id) },
+            get: { model.settings(for: vm.id).autoRebaseOnRejectedPush },
             set: { _ in model.toggleAutoRebase(vm.id) }
         ))
 

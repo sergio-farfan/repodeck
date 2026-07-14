@@ -6,13 +6,24 @@ import RepoDeckKit
 /// App-wide state: tracked root folders, discovered repos, and scan status.
 ///
 /// `trackedFolders` persists across launches via `UserDefaults.standard`
-/// (`@AppStorage` does not work inside `@Observable` classes).
+/// (`@AppStorage` does not work inside `@Observable` classes). Per-repo
+/// settings (pin, auto-rebase, ...) persist the same way, as a single
+/// `repoSettingsByID` dictionary under `repoSettings.v1` — see that
+/// property's doc comment.
 @MainActor
 @Observable
 final class AppModel {
     private static let trackedFolderPathsKey = "trackedFolderPaths"
+    /// Legacy pinned-repo-IDs key. Read-only from this commit on: it feeds
+    /// `RepoSettingsMigration` on first launch after the `repoSettings.v1`
+    /// switchover (and again if that data is ever found corrupt), but is
+    /// never written again.
     private static let pinnedRepoIDsKey = "pinnedRepoIDs"
+    /// Legacy auto-rebase-repo-IDs key. Read-only — see `pinnedRepoIDsKey`.
     private static let autoRebaseRepoIDsKey = "autoRebaseRepoIDs"
+    /// Consolidated per-repo settings store. Supersedes `pinnedRepoIDsKey`/
+    /// `autoRebaseRepoIDsKey`; see `repoSettingsByID`.
+    private static let repoSettingsKey = "repoSettings.v1"
     /// Minimum interval between watcher-triggered rescans. Guards against
     /// rescan storms when a burst of `.possibleNewRepo` events lands right
     /// after a rescan already ran (e.g. a multi-step `git clone`).
@@ -30,11 +41,12 @@ final class AppModel {
     var repos: [RepoViewModel] = []
     var isScanning = false
     var selectedRepoID: String?
-    var pinnedRepoIDs: Set<String>
-    /// Repos (by id, i.e. path) with "auto-rebase on rejected push" enabled.
-    /// Persisted like `pinnedRepoIDs`; mirrored onto each `RepoViewModel`'s
-    /// `autoRebaseOnRejectedPush` flag, which is what `push()` reads.
-    var autoRebaseRepoIDs: Set<String>
+    /// Consolidated per-repo settings (pin, auto-rebase, auto-fetch
+    /// interval, group), keyed by repo id (i.e. path). Persisted as one
+    /// JSON blob under `repoSettingsKey`. `private(set)`: `updateSettings`
+    /// is the sole write path, so every write also re-persists and (for
+    /// `autoRebaseOnRejectedPush`) re-mirrors onto the live `RepoViewModel`.
+    private(set) var repoSettingsByID: [String: RepoSettings]
     var filterText: String = ""
     /// Non-nil while `fetchAll`/`pullAll` is running. Also the reentrancy
     /// guard: a bulk op only starts when this is nil, so Fetch All and Pull
@@ -66,11 +78,35 @@ final class AppModel {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
         trackedFolders = paths.map { URL(fileURLWithPath: $0) }
 
-        let pinnedIDs = UserDefaults.standard.stringArray(forKey: Self.pinnedRepoIDsKey) ?? []
-        pinnedRepoIDs = Set(pinnedIDs)
+        // Migration inputs are read unconditionally (cheap, and needed by
+        // both the corrupt- and absent-key branches below); the legacy keys
+        // themselves are never written again after this point.
+        let legacyPinned = UserDefaults.standard.stringArray(forKey: Self.pinnedRepoIDsKey) ?? []
+        let legacyAutoRebase = UserDefaults.standard.stringArray(forKey: Self.autoRebaseRepoIDsKey) ?? []
 
-        let autoRebaseIDs = UserDefaults.standard.stringArray(forKey: Self.autoRebaseRepoIDsKey) ?? []
-        autoRebaseRepoIDs = Set(autoRebaseIDs)
+        if let data = UserDefaults.standard.data(forKey: Self.repoSettingsKey) {
+            if let decoded = try? JSONDecoder().decode([String: RepoSettings].self, from: data) {
+                repoSettingsByID = decoded
+            } else {
+                // Corrupt: recover by re-deriving from the legacy arrays.
+                // Not re-saved here — the next `updateSettings` call (or a
+                // future launch, harmlessly repeating this same recovery)
+                // will persist a clean value.
+                repoSettingsByID = RepoSettingsMigration.migrate(
+                    legacyPinned: legacyPinned,
+                    legacyAutoRebase: legacyAutoRebase
+                )
+            }
+        } else {
+            // Absent: first launch after this change. Migrate and save
+            // immediately so the one-way valve engages now, not on the
+            // user's first pin/toggle.
+            repoSettingsByID = RepoSettingsMigration.migrate(
+                legacyPinned: legacyPinned,
+                legacyAutoRebase: legacyAutoRebase
+            )
+            saveRepoSettings()
+        }
 
         watcherTask = Task { [weak self] in
             guard let events = self?.watcher.events else { return }
@@ -88,34 +124,47 @@ final class AppModel {
     /// Repos matching `filterText` (name or branch, case-insensitive) that are
     /// pinned, alphabetical. Empty when no pinned repo matches.
     var filteredPinned: [RepoViewModel] {
-        filteredAndSorted(repos.filter { pinnedRepoIDs.contains($0.id) })
+        filteredAndSorted(repos.filter { settings(for: $0.id).isPinned })
     }
 
     /// Repos matching `filterText` that are not pinned, alphabetical.
     var filteredUnpinned: [RepoViewModel] {
-        filteredAndSorted(repos.filter { !pinnedRepoIDs.contains($0.id) })
+        filteredAndSorted(repos.filter { !settings(for: $0.id).isPinned })
     }
 
-    /// Adds or removes `id` from the pinned set and persists it.
+    /// The settings for `id`, or all-default values if `id` has no entry
+    /// (i.e. it has never had a non-default setting).
+    func settings(for id: String) -> RepoSettings {
+        repoSettingsByID[id] ?? RepoSettings()
+    }
+
+    /// Sole write path for per-repo settings: mutates a copy, prunes it back
+    /// out of the dictionary if it round-tripped to all-default, persists,
+    /// and mirrors the auto-rebase flag onto the live view model (if any) so
+    /// the next `push()` picks it up.
+    func updateSettings(for id: String, _ mutate: (inout RepoSettings) -> Void) {
+        var s = settings(for: id)
+        mutate(&s)
+        if s.isDefault { repoSettingsByID.removeValue(forKey: id) } else { repoSettingsByID[id] = s }
+        saveRepoSettings()
+        repos.first { $0.id == id }?.autoRebaseOnRejectedPush = s.autoRebaseOnRejectedPush
+    }
+
+    private func saveRepoSettings() {
+        if let data = try? JSONEncoder().encode(repoSettingsByID) {
+            UserDefaults.standard.set(data, forKey: Self.repoSettingsKey)
+        }
+    }
+
+    /// Toggles `id`'s pinned flag and persists it.
     func togglePin(_ id: String) {
-        if pinnedRepoIDs.contains(id) {
-            pinnedRepoIDs.remove(id)
-        } else {
-            pinnedRepoIDs.insert(id)
-        }
-        UserDefaults.standard.set(Array(pinnedRepoIDs), forKey: Self.pinnedRepoIDsKey)
+        updateSettings(for: id) { $0.isPinned.toggle() }
     }
 
-    /// Adds or removes `id` from the auto-rebase set, persists it, and
-    /// updates the live view model's flag so the next Push picks it up.
+    /// Toggles `id`'s auto-rebase flag, persists it, and updates the live
+    /// view model's flag so the next Push picks it up.
     func toggleAutoRebase(_ id: String) {
-        if autoRebaseRepoIDs.contains(id) {
-            autoRebaseRepoIDs.remove(id)
-        } else {
-            autoRebaseRepoIDs.insert(id)
-        }
-        UserDefaults.standard.set(Array(autoRebaseRepoIDs), forKey: Self.autoRebaseRepoIDsKey)
-        repos.first { $0.id == id }?.autoRebaseOnRejectedPush = autoRebaseRepoIDs.contains(id)
+        updateSettings(for: id) { $0.autoRebaseOnRejectedPush.toggle() }
     }
 
     /// Drops a repo from the in-memory list only (e.g. a missing repo the
@@ -257,7 +306,7 @@ final class AppModel {
                 return existing
             }
             let vm = RepoViewModel(repo: repo, client: client)
-            vm.autoRebaseOnRejectedPush = autoRebaseRepoIDs.contains(repo.id)
+            vm.autoRebaseOnRejectedPush = settings(for: repo.id).autoRebaseOnRejectedPush
             return vm
         }
 
