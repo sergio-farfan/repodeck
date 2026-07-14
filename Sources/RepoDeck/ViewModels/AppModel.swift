@@ -129,9 +129,22 @@ final class AppModel {
         filteredAndSorted(repos.filter { settings(for: $0.id).isPinned })
     }
 
-    /// Repos matching `filterText` that are not pinned, alphabetical.
-    var filteredUnpinned: [RepoViewModel] {
-        filteredAndSorted(repos.filter { !settings(for: $0.id).isPinned })
+    /// Unpinned repos partitioned by group, ordered by group name; excludes
+    /// empty groups (a group exists only through its members).
+    var groupedSections: [(name: String, repos: [RepoViewModel])] {
+        let unpinned = repos.filter { !settings(for: $0.id).isPinned }
+        let byGroup = Dictionary(grouping: unpinned.filter { settings(for: $0.id).group != nil },
+                                 by: { settings(for: $0.id).group! })
+        return byGroup.keys.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            .compactMap { name in
+                let members = filteredAndSorted(byGroup[name] ?? [])
+                return members.isEmpty ? nil : (name: name, repos: members)
+            }
+    }
+
+    /// Unpinned repos with no group, filtered + sorted (the "Repositories" section).
+    var filteredUngrouped: [RepoViewModel] {
+        filteredAndSorted(repos.filter { !settings(for: $0.id).isPinned && settings(for: $0.id).group == nil })
     }
 
     /// The settings for `id`, or all-default values if `id` has no entry
@@ -176,6 +189,11 @@ final class AppModel {
     /// view model's flag so the next Push picks it up.
     func toggleAutoRebase(_ id: String) {
         updateSettings(for: id) { $0.autoRebaseOnRejectedPush.toggle() }
+    }
+
+    /// Assigns `id` to group `name` (or ungroups it if `nil`) and persists it.
+    func assignGroup(_ name: String?, to id: String) {
+        updateSettings(for: id) { $0.group = name }
     }
 
     /// Drops a repo from the in-memory list only (e.g. a missing repo the

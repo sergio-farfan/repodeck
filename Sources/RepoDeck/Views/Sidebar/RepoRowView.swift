@@ -76,6 +76,31 @@ struct RepoRowView: View {
     }
 
     @ViewBuilder
+    private var moveToGroupContent: some View {
+        let currentGroup = model.settings(for: vm.id).group
+        let otherGroups = model.groupNames.filter { $0 != currentGroup }
+
+        ForEach(otherGroups, id: \.self) { name in
+            Button(name) {
+                model.assignGroup(name, to: vm.id)
+            }
+        }
+
+        if currentGroup != nil {
+            Divider()
+            Button("None") {
+                model.assignGroup(nil, to: vm.id)
+            }
+        }
+
+        Divider()
+
+        Button("New Group…") {
+            model.repoSettingsTarget = vm
+        }
+    }
+
+    @ViewBuilder
     private var contextMenuContent: some View {
         Button {
             model.togglePin(vm.id)
@@ -94,6 +119,10 @@ struct RepoRowView: View {
 
         Button("Repository Settings…") {
             model.repoSettingsTarget = vm
+        }
+
+        Menu("Move to Group") {
+            moveToGroupContent
         }
 
         Divider()

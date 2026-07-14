@@ -15,9 +15,19 @@ struct RepoListView: View {
                 }
             }
 
-            Section("Repositories") {
-                ForEach(model.filteredUnpinned) { vm in
-                    RepoRowView(vm: vm)
+            ForEach(model.groupedSections, id: \.name) { section in
+                Section(section.name) {
+                    ForEach(section.repos) { vm in
+                        RepoRowView(vm: vm)
+                    }
+                }
+            }
+
+            if !model.filteredUngrouped.isEmpty {
+                Section("Repositories") {
+                    ForEach(model.filteredUngrouped) { vm in
+                        RepoRowView(vm: vm)
+                    }
                 }
             }
         }
