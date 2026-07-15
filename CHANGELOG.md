@@ -5,6 +5,12 @@ All notable changes to RepoDeck will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-07-15
+
+### Added
+
+- **Hunk staging from the diff view** — the diff inspector is no longer read-only: each hunk in an unstaged file's diff gets a + button to stage just that hunk into the index, and each hunk in a staged file's diff gets a − button to unstage it, leaving the file's other hunks untouched. The diff reloads after every action, so a staged hunk disappears from the unstaged side (and vice versa); a hunk that no longer applies because the file changed underneath surfaces the normal error banner. Commit diffs remain read-only, and untracked or conflicted files keep their whole-file controls. This completes the diff feature introduced in 1.5.0.
+
 ## [1.6.0] - 2026-07-15
 
 ### Added

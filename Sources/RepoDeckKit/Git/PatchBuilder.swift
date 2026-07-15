@@ -92,7 +92,12 @@ public enum PatchBuilder {
         // one. 100644 is the common-case text-file mode; since 8a's
         // FileDiff carries no mode info, a new EXECUTABLE file staged this
         // way would land as 100644 — an accepted v1 limitation, not
-        // something to infer here.
+        // something to infer here. The same 100644 assumption also makes
+        // UNSTAGING a staged delete of a 100755 file inexact: it leaves a
+        // residual staged mode change (100755 -> 100644) the user didn't
+        // ask for, recoverable via the whole-file unstage control. Carrying
+        // real modes through FileDiff (DiffParser sees the mode header lines)
+        // is the eventual fix.
         if isAdd {
             output.append("new file mode 100644")
         } else if isDelete {
