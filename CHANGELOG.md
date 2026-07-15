@@ -5,6 +5,12 @@ All notable changes to RepoDeck will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-14
+
+### Added
+
+- **Read-only diff view** — right-click any changed file (staged, unstaged, or untracked) or any commit in History and choose **View Diff** to open a side inspector with a unified diff: per-file headers (renames shown as `old → new`), hunk headers, a two-column old/new line-number gutter, and green/red tinted added and removed lines. Binary files are labeled rather than rendered; a conflicted file explains it must be resolved first; an over-large diff is capped rather than freezing the app. The inspector closes with its ✕ button and clears when you switch repos. Double-click still opens the file in TextEdit. Read-only in this release — staging individual hunks from the diff view is coming next.
+
 ## [1.4.0] - 2026-07-14
 
 ### Added
