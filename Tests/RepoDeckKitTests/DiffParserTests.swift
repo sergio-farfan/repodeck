@@ -36,6 +36,43 @@ private func fixture(_ lines: String...) -> String {
     #expect(diffs[0].newPath == "f.txt")
 }
 
+@Test func hunkBodyLinesStartingWithDashDashOrPlusPlusAreNotMisparsedAsHeaders() {
+    // A deleted comment line ("-- old") reads, with its "-" marker, as raw
+    // "--- old" — which must NOT be mistaken for a "--- a/path" file header.
+    // Same for an added "++ new" reading as raw "+++ new". Regression test:
+    // these once corrupted oldPath/newPath and every following line number.
+    let output = fixture(
+        "diff --git a/schema.sql b/schema.sql",
+        "index 83db48f..0682d7d 100644",
+        "--- a/schema.sql",
+        "+++ b/schema.sql",
+        "@@ -1,3 +1,3 @@",
+        " CREATE TABLE t;",
+        "-- old comment",
+        "++ new marker",
+        " END;"
+    )
+
+    let diffs = DiffParser.parse(output)
+
+    #expect(diffs.count == 1)
+    let diff = diffs[0]
+    // Paths must come from the real "--- a/"/"+++ b/" headers, uncorrupted.
+    #expect(diff.oldPath == "schema.sql")
+    #expect(diff.newPath == "schema.sql")
+    #expect(diff.isBinary == false)
+    #expect(diff.hunks.count == 1)
+
+    // The "-- old comment" and "++ new marker" lines are body content, with
+    // their markers stripped and line numbers tracked correctly.
+    #expect(diff.hunks[0].lines == [
+        DiffLine(kind: .context, text: "CREATE TABLE t;", oldLine: 1, newLine: 1),
+        DiffLine(kind: .deletion, text: "- old comment", oldLine: 2, newLine: nil),
+        DiffLine(kind: .addition, text: "+ new marker", oldLine: nil, newLine: 2),
+        DiffLine(kind: .context, text: "END;", oldLine: 3, newLine: 3),
+    ])
+}
+
 @Test func singleHunkAddRemoveContextMixNumbersLinesCorrectly() {
     let output = fixture(
         "diff --git a/f.txt b/f.txt",

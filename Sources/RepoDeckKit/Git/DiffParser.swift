@@ -76,17 +76,28 @@ public enum DiffParser {
 
             guard hasOpenFile else { continue }
 
-            if rawLine.hasPrefix("--- ") {
-                oldPath = parsePathLine(rawLine, prefixLength: 4)
-                continue
-            }
-            if rawLine.hasPrefix("+++ ") {
-                newPath = parsePathLine(rawLine, prefixLength: 4)
-                continue
-            }
-            if rawLine.hasPrefix("Binary files "), rawLine.hasSuffix(" differ") {
-                isBinary = true
-                continue
+            // File-header lines ("--- a/…", "+++ b/…", "Binary files …")
+            // only ever appear before a file's first hunk. Restrict these
+            // checks to that pre-hunk region: once a hunk is open, a body
+            // line whose content starts with "-- " (a deleted SQL/Lua/Haskell
+            // comment reads as raw "--- …") or "++ " would otherwise be
+            // misparsed as a header — silently dropped, corrupting the path
+            // and every following line number in the hunk. `hunks.isEmpty`
+            // covers between-hunk gaps too; git never re-emits a header line
+            // after the first `@@`.
+            if hunkHeader == nil, hunks.isEmpty {
+                if rawLine.hasPrefix("--- ") {
+                    oldPath = parsePathLine(rawLine, prefixLength: 4)
+                    continue
+                }
+                if rawLine.hasPrefix("+++ ") {
+                    newPath = parsePathLine(rawLine, prefixLength: 4)
+                    continue
+                }
+                if rawLine.hasPrefix("Binary files "), rawLine.hasSuffix(" differ") {
+                    isBinary = true
+                    continue
+                }
             }
             if rawLine.hasPrefix("@@ ") {
                 finalizeHunk()
