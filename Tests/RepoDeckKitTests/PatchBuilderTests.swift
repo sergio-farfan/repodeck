@@ -101,7 +101,7 @@ import Testing
         #expect(!patch.contains("-old\r\r"))
     }
 
-    @Test func addedFileHeaderKeepsDevNullVerbatimOnTheOldSide() {
+    @Test func addedFileHeaderUsesTheRealFilenameOnBothDiffGitSidesAndEmitsNewFileMode() {
         let hunk = Hunk(
             oldStart: 0, oldCount: 0, newStart: 1, newCount: 1,
             header: "@@ -0,0 +1 @@",
@@ -112,12 +112,15 @@ import Testing
         let patch = PatchBuilder.patch(for: hunk, in: diffFile, reverse: false)
         let lines = patch.components(separatedBy: "\n")
 
-        #expect(lines[0] == "diff --git /dev/null b/new.txt")
-        #expect(lines[1] == "--- /dev/null")
-        #expect(lines[2] == "+++ b/new.txt")
+        // git never puts /dev/null on the `diff --git` line — both sides
+        // name the real file even for an add.
+        #expect(lines[0] == "diff --git a/new.txt b/new.txt")
+        #expect(lines[1] == "new file mode 100644")
+        #expect(lines[2] == "--- /dev/null")
+        #expect(lines[3] == "+++ b/new.txt")
     }
 
-    @Test func deletedFileHeaderKeepsDevNullVerbatimOnTheNewSide() {
+    @Test func deletedFileHeaderUsesTheRealFilenameOnBothDiffGitSidesAndEmitsDeletedFileMode() {
         let hunk = Hunk(
             oldStart: 1, oldCount: 1, newStart: 0, newCount: 0,
             header: "@@ -1 +0,0 @@",
@@ -128,8 +131,37 @@ import Testing
         let patch = PatchBuilder.patch(for: hunk, in: diffFile, reverse: false)
         let lines = patch.components(separatedBy: "\n")
 
-        #expect(lines[0] == "diff --git a/old.txt /dev/null")
-        #expect(lines[1] == "--- a/old.txt")
-        #expect(lines[2] == "+++ /dev/null")
+        // git never puts /dev/null on the `diff --git` line — both sides
+        // name the real file even for a delete.
+        #expect(lines[0] == "diff --git a/old.txt b/old.txt")
+        #expect(lines[1] == "deleted file mode 100644")
+        #expect(lines[2] == "--- a/old.txt")
+        #expect(lines[3] == "+++ /dev/null")
+    }
+
+    @Test func reverseSwapsStartsWhenOldStartDiffersFromNewStart() {
+        // Every existing reverse fixture has oldStart == newStart, so a
+        // dropped start-swap would pass silently. Here oldStart(5) !=
+        // newStart(9), and forward vs. reverse counts also differ (2 vs 3),
+        // so both the start-swap and the count-swap are independently
+        // checkable, not just coincidentally equal.
+        let hunk = Hunk(
+            oldStart: 5, oldCount: 999, newStart: 9, newCount: 999,
+            header: "@@ -5,999 +9,999 @@",
+            lines: [
+                DiffLine(kind: .context, text: "ctx", oldLine: 5, newLine: 9),
+                DiffLine(kind: .deletion, text: "old", oldLine: 6, newLine: nil),
+                DiffLine(kind: .addition, text: "new1", oldLine: nil, newLine: 10),
+                DiffLine(kind: .addition, text: "new2", oldLine: nil, newLine: 11),
+            ]
+        )
+
+        // Forward: oldCount = context(1)+deletion(1) = 2; newCount = context(1)+addition(2) = 3.
+        let forward = PatchBuilder.patch(for: hunk, in: file(), reverse: false)
+        #expect(forward.components(separatedBy: "\n")[3] == "@@ -5,2 +9,3 @@")
+
+        // Reverse swaps BOTH starts (5<->9) and counts (2<->3).
+        let reverse = PatchBuilder.patch(for: hunk, in: file(), reverse: true)
+        #expect(reverse.components(separatedBy: "\n")[3] == "@@ -9,3 +5,2 @@")
     }
 }

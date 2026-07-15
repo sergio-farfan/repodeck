@@ -287,4 +287,97 @@ import Testing
             #expect(staged.contains("line3-CHANGED"))
         }
     }
+
+    /// `git ls-files --cached` via a direct call — used to assert the index
+    /// never gained a bogus path (e.g. a literal `dev/null` entry from a
+    /// mis-built `diff --git` line).
+    private func cachedPaths(in repo: URL) async throws -> [String] {
+        let result = try await ProcessRunner.run(arguments: ["-C", repo.path, "ls-files", "--cached"])
+        return String(decoding: result.stdout, as: UTF8.self)
+            .split(separator: "\n")
+            .map(String.init)
+    }
+
+    // MARK: 10. New-file hunk (Fix 1) — real `git apply --cached` against an add
+
+    @Test func newFileHunkStagesAsAddedFileWithoutABogusDevNullPath() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("new.txt")
+            try "hello\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+            let fileDiff = try #require(try await client.diffUntracked(path: "new.txt", in: repo))
+            #expect(fileDiff.oldPath == "/dev/null")
+            #expect(fileDiff.hunks.count == 1)
+            let hunk = fileDiff.hunks[0]
+
+            let patch = PatchBuilder.patch(for: hunk, in: fileDiff, reverse: false)
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            let status = try await client.status(in: repo)
+            let staged = try #require(status.changes.first { $0.area == .staged && $0.path == "new.txt" })
+            #expect(staged.statusLetter == "A")
+
+            let paths = try await cachedPaths(in: repo)
+            #expect(paths.contains("new.txt"))
+            #expect(!paths.contains { $0.contains("dev/null") })
+        }
+    }
+
+    // MARK: 11. Deleted-file hunk (Fix 1) — real `git apply --cached` against a delete
+
+    @Test func deletedFileHunkStagesDeletionWithoutABogusDevNullPath() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("old.txt")
+            try "hello\n".write(to: fileURL, atomically: true, encoding: .utf8)
+            try await client.stageAll(in: repo)
+            try await client.commit(message: "feat: initial", in: repo)
+
+            try FileManager.default.removeItem(at: fileURL)
+
+            let fileDiff = try #require(try await client.diff(path: "old.txt", staged: false, in: repo))
+            #expect(fileDiff.newPath == "/dev/null")
+            #expect(fileDiff.hunks.count == 1)
+            let hunk = fileDiff.hunks[0]
+
+            let patch = PatchBuilder.patch(for: hunk, in: fileDiff, reverse: false)
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            let status = try await client.status(in: repo)
+            let staged = try #require(status.changes.first { $0.area == .staged && $0.path == "old.txt" })
+            #expect(staged.statusLetter == "D")
+
+            let paths = try await cachedPaths(in: repo)
+            #expect(!paths.contains("old.txt"))
+            #expect(!paths.contains { $0.contains("dev/null") })
+        }
+    }
+
+    // MARK: 12. One-line file (Fix 3) — proves the explicit ",1" header form
+
+    @Test func oneLineFileChangeProducesExplicitCountOneHunkThatRealGitAccepts() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("single.txt")
+            try "hello\n".write(to: fileURL, atomically: true, encoding: .utf8)
+            try await client.stageAll(in: repo)
+            try await client.commit(message: "feat: single-line initial", in: repo)
+
+            try "world\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+            let fileDiff = try #require(try await client.diff(path: "single.txt", staged: false, in: repo))
+            #expect(fileDiff.hunks.count == 1)
+            let hunk = fileDiff.hunks[0]
+            // No surrounding context is possible in a one-line file: the
+            // computed old/new counts are both 1.
+            #expect(hunk.oldCount == 1)
+            #expect(hunk.newCount == 1)
+
+            let patch = PatchBuilder.patch(for: hunk, in: fileDiff, reverse: false)
+            #expect(patch.contains("@@ -1,1 +1,1 @@"))
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            let staged = try await cachedDiffText("single.txt", in: repo)
+            #expect(staged.contains("+world"))
+            #expect(staged.contains("-hello"))
+        }
+    }
 }

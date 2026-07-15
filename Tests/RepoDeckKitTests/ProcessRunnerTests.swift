@@ -133,6 +133,28 @@ import Testing
         #expect(result.stdout == input)
     }
 
+    @Test func writingStdinToANonReadingChildDoesNotCrashTheProcess() async throws {
+        // `/usr/bin/true` exits immediately WITHOUT reading stdin, so our
+        // detached write task races a reader that's already gone — the
+        // write can hit a closed pipe. Before the fix, the default SIGPIPE
+        // disposition terminates this whole test process (exit 141 =
+        // 128+SIGPIPE) BEFORE `write(contentsOf:)` can throw, so the
+        // existing `try?` never gets a chance to swallow anything. After
+        // the fix (F_SETNOSIGPIPE on the write fd), the write instead
+        // surfaces a catchable EPIPE that `try?` swallows, and `run`
+        // returns normally with the child's real exit code.
+        var bytes = [UInt8](repeating: 0, count: 8_000_000)
+        for i in 0..<bytes.count { bytes[i] = UInt8(i % 256) }
+        let input = Data(bytes)
+
+        let result = try await ProcessRunner.run(
+            "/usr/bin/true",
+            arguments: [],
+            stdin: input
+        )
+        #expect(result.exitCode == 0)
+    }
+
     @Test func catEchoesMultiMegabyteStdinWithoutDeadlock() async throws {
         // Several MB is large enough to fill the stdin/stdout pipe buffers
         // several times over; a naive "write all of stdin, then start

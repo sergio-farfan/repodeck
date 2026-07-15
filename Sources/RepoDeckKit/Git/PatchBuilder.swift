@@ -13,7 +13,9 @@ import Foundation
 public enum PatchBuilder {
     /// Builds a minimal, applyable unified-diff patch for ONE hunk of one
     /// file, suitable for `git apply --cached [--reverse]`. Emits:
-    ///   "diff --git a/<old> b/<new>"        (helps git identify the file)
+    ///   "diff --git a/<real-old> b/<real-new>" (ALWAYS the real filename on
+    ///     both sides, even for an add/delete — git never puts /dev/null here)
+    ///   "new file mode 100644" (add only) or "deleted file mode 100644" (delete only)
     ///   "--- a/<old>"  (or "--- /dev/null" for an added file)
     ///   "+++ b/<new>"  (or "+++ /dev/null" for a deleted file)
     ///   the recomputed "@@ -oldStart,oldCount +newStart,newCount @@" header
@@ -50,12 +52,34 @@ public enum PatchBuilder {
         let finalOldCount = reverse ? newCount : oldCount
         let finalNewCount = reverse ? oldCount : newCount
 
+        // The `diff --git` line NEVER carries `/dev/null` on either side —
+        // git always names the real file with `a/`/`b/` prefixes there, even
+        // for an add or a delete (only the `---`/`+++` lines below use
+        // `/dev/null`, to mark "this side doesn't exist"). For a modify,
+        // oldPath == newPath so this is a no-op; for an add, both sides
+        // become newPath; for a delete, both become oldPath.
+        let isAdd = file.oldPath == "/dev/null"
+        let isDelete = file.newPath == "/dev/null"
+        let realOld = isAdd ? file.newPath : file.oldPath
+        let realNew = isDelete ? file.oldPath : file.newPath
+
         var output: [String] = [
-            "diff --git \(headerPath(file.oldPath, prefix: "a/")) \(headerPath(file.newPath, prefix: "b/"))",
-            "--- \(headerPath(file.oldPath, prefix: "a/"))",
-            "+++ \(headerPath(file.newPath, prefix: "b/"))",
-            "@@ -\(oldStart),\(finalOldCount) +\(newStart),\(finalNewCount) @@",
+            "diff --git a/\(realOld) b/\(realNew)",
         ]
+        // Git needs an explicit mode line for `git apply --cached` to know
+        // whether this hunk adds or removes a file rather than modifying
+        // one. 100644 is the common-case text-file mode; since 8a's
+        // FileDiff carries no mode info, a new EXECUTABLE file staged this
+        // way would land as 100644 — an accepted v1 limitation, not
+        // something to infer here.
+        if isAdd {
+            output.append("new file mode 100644")
+        } else if isDelete {
+            output.append("deleted file mode 100644")
+        }
+        output.append("--- \(headerPath(file.oldPath, prefix: "a/"))")
+        output.append("+++ \(headerPath(file.newPath, prefix: "b/"))")
+        output.append("@@ -\(oldStart),\(finalOldCount) +\(newStart),\(finalNewCount) @@")
 
         for line in hunk.lines {
             output.append(marker(for: line.kind, reverse: reverse) + line.text)

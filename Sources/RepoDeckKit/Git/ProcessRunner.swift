@@ -127,9 +127,22 @@ public enum ProcessRunner {
         // to its full stdin pipe. Running the write concurrently with the
         // drain avoids that — whichever side's buffer fills first, the
         // other side is already being serviced. Closing the write end after
-        // the write signals EOF to the child; `try?` swallows a broken-pipe
-        // write (the child exited early without reading all of it).
+        // the write signals EOF to the child.
+        //
+        // If the child exits without reading all of stdin (e.g. `git apply`
+        // rejecting a patch outright, or `/usr/bin/true` never reading at
+        // all), the write end's reader is gone and the write would normally
+        // raise SIGPIPE — whose default disposition TERMINATES THE WHOLE
+        // PROCESS before `write(contentsOf:)` can even throw, so `try?`
+        // below would never get a chance to run. `F_SETNOSIGPIPE` disables
+        // that signal for this fd specifically, so a closed-reader write
+        // instead surfaces as a catchable EPIPE error, which `try?` then
+        // correctly swallows.
         if let stdin, let stdinPipe {
+            let writeFD = stdinPipe.fileHandleForWriting.fileDescriptor
+            #if canImport(Darwin)
+            _ = fcntl(writeFD, F_SETNOSIGPIPE, 1)
+            #endif
             Task.detached {
                 try? stdinPipe.fileHandleForWriting.write(contentsOf: stdin)
                 try? stdinPipe.fileHandleForWriting.close()
