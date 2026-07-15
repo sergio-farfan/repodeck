@@ -12,6 +12,13 @@ struct SettingsView: View {
         @Bindable var settings = settings
 
         Form {
+            Section("General") {
+                Toggle("Show menu bar icon", isOn: Binding(
+                    get: { model.isMenuBarExtraEnabled },
+                    set: { model.isMenuBarExtraEnabled = $0 }
+                ))
+            }
+
             Section("Appearance") {
                 Picker("Appearance", selection: $settings.appearance) {
                     ForEach(ThemeSettings.Appearance.allCases, id: \.self) { mode in

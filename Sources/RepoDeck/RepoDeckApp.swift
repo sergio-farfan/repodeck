@@ -8,7 +8,7 @@ struct RepoDeckApp: App {
     @State private var theme = ThemeSettings()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView()
                 .environment(model)
                 .environment(theme)
@@ -42,6 +42,28 @@ struct RepoDeckApp: App {
                 .preferredColorScheme(theme.appearance.colorScheme)
                 .tint(theme.accent)
         }
+
+        // Optional menu-bar presentation, toggleable in Settings ▸ General;
+        // the full window (above) stays primary. Scenes don't inherit each
+        // other's environment, so the chain is re-injected here too — same
+        // reason the Settings scene does it. `preferredColorScheme` doesn't
+        // cross into a menu-bar window meaningfully, so it's omitted; `\.theme`
+        // + `theme` carry accent/fonts instead.
+        MenuBarExtra(
+            "RepoDeck",
+            systemImage: "square.stack.3d.up.fill",
+            isInserted: Binding(
+                get: { model.isMenuBarExtraEnabled },
+                set: { model.isMenuBarExtraEnabled = $0 }
+            )
+        ) {
+            MenuBarContentView()
+                .environment(model)
+                .environment(theme)
+                .environment(\.theme, Theme(settings: theme))
+                .tint(theme.accent)
+        }
+        .menuBarExtraStyle(.window)
     }
 }
 

@@ -24,6 +24,8 @@ final class AppModel {
     /// Consolidated per-repo settings store. Supersedes `pinnedRepoIDsKey`/
     /// `autoRebaseRepoIDsKey`; see `repoSettingsByID`.
     private static let repoSettingsKey = "repoSettings.v1"
+    /// Persists `isMenuBarExtraEnabled`.
+    private static let menuBarEnabledKey = "menuBarExtra.enabled"
     /// Minimum interval between watcher-triggered rescans. Guards against
     /// rescan storms when a burst of `.possibleNewRepo` events lands right
     /// after a rescan already ran (e.g. a multi-step `git clone`).
@@ -52,6 +54,14 @@ final class AppModel {
     /// `autoRebaseOnRejectedPush`) re-mirrors onto the live `RepoViewModel`.
     private(set) var repoSettingsByID: [String: RepoSettings]
     var filterText: String = ""
+    /// Whether the `MenuBarExtra` presentation (see `RepoDeckApp`) is shown
+    /// alongside the full window. Persisted; default off. The full window
+    /// remains primary regardless of this flag — see the brief's YAGNI note.
+    var isMenuBarExtraEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(isMenuBarExtraEnabled, forKey: Self.menuBarEnabledKey)
+        }
+    }
     /// Non-nil while `fetchAll`/`pullAll` is running. Also the reentrancy
     /// guard: a bulk op only starts when this is nil, so Fetch All and Pull
     /// All can never overlap, with each other or with themselves.
@@ -95,6 +105,7 @@ final class AppModel {
     init() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
         trackedFolders = paths.map { URL(fileURLWithPath: $0) }
+        isMenuBarExtraEnabled = UserDefaults.standard.bool(forKey: Self.menuBarEnabledKey)
         // Assigned before any other stored property below touches `self`
         // (Swift requires every `let` to be set before `self` escapes) —
         // the auth-check `Task` that uses this value is kicked off later,
