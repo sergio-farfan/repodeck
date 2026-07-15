@@ -264,13 +264,33 @@ final class RepoViewModel: @MainActor Identifiable {
         }
         isRefreshingPR = true
         defer { isRefreshingPR = false }
-        do {
-            prInfo = try await gh.pullRequest(forBranch: branch, in: repo.path)
-        } catch {
-            prInfo = nil
+        // Re-fetch until the branch we fetched for is still the current one.
+        // The in-flight guard above drops concurrent callers, so if a
+        // checkout lands mid-fetch we must pick up the new branch here — else
+        // the dropped call for the new branch never runs and, worse, this
+        // one would stamp the old branch as freshly-cached, leaving the new
+        // branch's badge stuck blank. Each iteration is a real (capped,
+        // timed-out) gh call, so this settles in practice rather than spins.
+        var target = branch
+        while true {
+            let fetched = try? await gh.pullRequest(forBranch: target, in: repo.path)
+            guard let current = status?.branch else {
+                // Branch became indeterminate (detached HEAD / status cleared)
+                // while fetching — nothing valid to show.
+                prInfo = nil
+                prInfoBranch = nil
+                prInfoFetchedAt = nil
+                return
+            }
+            if current != target {
+                target = current
+                continue
+            }
+            prInfo = fetched ?? nil
+            prInfoBranch = target
+            prInfoFetchedAt = Date()
+            return
         }
-        prInfoBranch = branch
-        prInfoFetchedAt = Date()
     }
 
     /// Debounces `historyQuery` edits: cancels any prior pending search in
