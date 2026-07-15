@@ -5,6 +5,19 @@ All notable changes to RepoDeck will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-14
+
+### Added
+
+- **Undo for pull and auto-rebase push** — RepoDeck snapshots HEAD (as a `refs/repodeck/undo/*` ref, so it survives restarts and `git gc`) before every pull and before the rebase-and-retry of an auto-rebase push. An Undo button appears in the sync bar; restoring uses `git reset --keep`, which preserves uncommitted work and refuses rather than clobbering local edits. If the repo has moved on since the operation, Undo refuses with a clear error. One level, per repo; remote state is never touched.
+- **Stash support** — a Stashes section at the bottom of the Changes list shows each stash with a relative date; right-click to Apply, Pop, or Drop (Drop asks for confirmation). A Stash button in the sync bar stashes all current changes, untracked files included.
+- **GitHub PR/CI badges** — with the GitHub CLI (`gh`) installed and authenticated, the sync bar shows the current branch's open PR (number, draft marker) with a CI rollup dot (green passing / red failing / amber pending / hollow when no checks); click to open the PR. Read-only, refreshed at most every 5 minutes and immediately after a push; invisible when `gh` is missing. Settings ▸ Integrations reports what RepoDeck found.
+- **Menu-bar mode** — Settings ▸ General ▸ "Show menu bar icon" adds a menu-bar panel: repo summary, pinned-then-dirtiest repo list (click a row to open it in the main window), and Fetch All / Pull All / Quit. Off by default; the main window stays primary.
+
+### Changed
+
+- Stash-changing actions keep the repo marked busy until the stash list has re-synced, so rapid follow-up actions can never act on stale stash indices.
+
 ## [1.3.0] - 2026-07-14
 
 ### Added
