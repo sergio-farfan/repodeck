@@ -142,6 +142,9 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Upper bound on `commandOutput`'s length, in characters. Keeps memory
     /// bounded against a chatty or long-lived command.
     private static let commandOutputCap = 200_000
+    /// Trim only once output grows well past the cap (in UTF-8 bytes), so the
+    /// O(n) trim runs rarely rather than on every chunk once at steady state.
+    private static let commandOutputHighWater = 300_000
 
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
     /// that arrives mid-refresh is folded into a single trailing refresh
@@ -680,6 +683,8 @@ final class RepoViewModel: @MainActor Identifiable {
 
     /// Cancels the in-flight command, if any.
     func cancelCommand() {
+        guard isRunningCommand else { return }
+        appendOutput("[stopped]\n")
         commandTask?.cancel()
     }
 
@@ -688,6 +693,11 @@ final class RepoViewModel: @MainActor Identifiable {
     /// next line boundary, so the cap never splits a line mid-way.
     private func appendOutput(_ text: String) {
         commandOutput += text
+        // O(1) guard: Swift's native String stores its UTF-8 byte count, so
+        // `utf8.count` doesn't rescan the way `.count` (grapheme segmentation)
+        // would — cheap to check on every chunk. The O(n) trim below only
+        // runs once output crosses the high-water mark, not per chunk.
+        guard commandOutput.utf8.count > Self.commandOutputHighWater else { return }
         let overflow = commandOutput.count - Self.commandOutputCap
         guard overflow > 0 else { return }
         let dropPoint = commandOutput.index(commandOutput.startIndex, offsetBy: overflow)
