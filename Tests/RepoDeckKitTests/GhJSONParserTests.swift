@@ -103,6 +103,42 @@ private func wrap(_ prJSON: String) -> Data {
     #expect(info?.checks == .passing)
 }
 
+@Test func checkRunStartupFailureConclusionCollapsesToFailing() throws {
+    // GitHub Actions conclusion when a workflow fails to even start (e.g. a
+    // runner provisioning error) — CI has NOT passed, must not read green.
+    let data = wrap(#"""
+    {
+        "number": 64510, "title": "ci: bump runner image", "isDraft": false,
+        "url": "https://github.com/nodejs/node/pull/64510", "reviewDecision": "REVIEW_REQUIRED",
+        "statusCheckRollup": [
+            {"__typename":"CheckRun","status":"COMPLETED","conclusion":"STARTUP_FAILURE","name":"build-tarball","workflowName":"Build from tarball","startedAt":"2026-07-14T22:15:06Z","completedAt":"2026-07-14T22:15:07Z","detailsUrl":"https://github.com/nodejs/node/actions/runs/29372367041/job/87218325088"}
+        ]
+    }
+    """#)
+
+    let info = try GhJSONParser.parse(data)
+
+    #expect(info?.checks == .failing)
+}
+
+@Test func statusContextExpectedStateCollapsesToPending() throws {
+    // Classic Commit-Status-API "EXPECTED" state: the context is required
+    // but hasn't reported yet — not yet passed, must not read green.
+    let data = wrap(#"""
+    {
+        "number": 58121, "title": "Add new required status check", "isDraft": false,
+        "url": "https://github.com/rails/rails/pull/58121", "reviewDecision": "REVIEW_REQUIRED",
+        "statusCheckRollup": [
+            {"__typename":"StatusContext","context":"buildkite/rails","state":"EXPECTED","startedAt":"2026-07-14T20:28:16Z","targetUrl":"https://buildkite.com/rails/rails/builds/130977"}
+        ]
+    }
+    """#)
+
+    let info = try GhJSONParser.parse(data)
+
+    #expect(info?.checks == .pending)
+}
+
 @Test func statusContextSuccessCollapsesToPassing() throws {
     // rails/rails PR #58120, buildkite status contexts (classic Commit
     // Status API, not Checks).

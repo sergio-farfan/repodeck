@@ -274,6 +274,14 @@ final class RepoViewModel: @MainActor Identifiable {
         var target = branch
         while true {
             let fetched = try? await gh.pullRequest(forBranch: target, in: repo.path)
+            // `ProcessRunner` is cancellation-aware (SIGTERMs the child): a
+            // `.task` cancellation (branch change / repo switch mid-fetch)
+            // surfaces here as `gh.pullRequest` throwing, `try?` collapsing
+            // it to `fetched = nil`. Bail before any state write — stamping
+            // `prInfoFetchedAt` on a cancelled fetch would nil-cache a WRONG
+            // empty result for the TTL, leaving prior (still-valid) state
+            // clobbered until the next branch/repo change forces a refetch.
+            if Task.isCancelled { return }
             guard let current = status?.branch else {
                 // Branch became indeterminate (detached HEAD / status cleared)
                 // while fetching — nothing valid to show.
@@ -342,6 +350,16 @@ final class RepoViewModel: @MainActor Identifiable {
             try await client.commit(message: trimmedMessage, in: repo.path)
             actionError = nil
             commitMessage = ""
+            // A commit moves HEAD, so any pending pull/auto-rebase-push
+            // undo record is now stale — its `expectedHead` guard would
+            // fire on every future click. Clear it here (not just on the
+            // next sync operation's own overwrite) so the Undo button
+            // doesn't linger uselessly after the common pull-then-commit
+            // sequence.
+            if let record = undoRecord {
+                await client.discardUndoSnapshot(record.snapshot, in: repo.path)
+                undoRecord = nil
+            }
             await refreshStatus()
             await refreshLog()
         } catch let error as GitError {
@@ -379,7 +397,9 @@ final class RepoViewModel: @MainActor Identifiable {
     /// ahead/behind counts. With `autoRebaseOnRejectedPush` set, a
     /// non-fast-forward rejection triggers `git pull --rebase --autostash`
     /// and a single retry — and since that can pull new commits in, the log
-    /// is refreshed too in that mode.
+    /// is refreshed too in that mode; stashes are refreshed too, since an
+    /// autostash-pop conflict during the rebase leaves a real stash entry
+    /// behind.
     ///
     /// That rebase-and-retry is the only branch of `push()` that rewrites
     /// local history, so it's the only branch that snapshots — and only
@@ -394,7 +414,11 @@ final class RepoViewModel: @MainActor Identifiable {
     /// `AppModel.isGhAvailable` is false, which skips the refresh entirely.
     func push(using gh: GhClient? = nil) async {
         if autoRebaseOnRejectedPush {
-            await performAction(refreshingLog: true) {
+            // `refreshingStashes: true` because an autostash-pop conflict
+            // during `pull --rebase --autostash` leaves a real stash entry
+            // behind — without this it stays hidden until the repo is
+            // reselected.
+            await performAction(refreshingLog: true, refreshingStashes: true) {
                 let snapshot = try await self.client.writeUndoSnapshot(in: self.repo.path)
                 // See `pull()`: the snapshot write prunes any prior undo ref,
                 // so clear the now-stale record before the push, which may
@@ -426,9 +450,20 @@ final class RepoViewModel: @MainActor Identifiable {
     func undoLastSync() async {
         guard let record = undoRecord else { return }
         await performAction {
-            try await self.client.restoreUndoSnapshot(
-                record.snapshot, expectedHead: record.postOpHead, in: self.repo.path
-            )
+            do {
+                try await self.client.restoreUndoSnapshot(
+                    record.snapshot, expectedHead: record.postOpHead, in: self.repo.path
+                )
+            } catch let error as GitError where error.isMovedOnSinceSnapshot {
+                // The repo moved on since the snapshot (external commit or
+                // HEAD move) — the record is now known-stale, so clear it
+                // before rethrowing to `performAction`'s error banner.
+                // Other failures (e.g. `reset --keep` refusing a
+                // dirty-clobber) leave the record intact so the user can
+                // retry after cleaning up.
+                self.undoRecord = nil
+                throw error
+            }
             self.undoRecord = nil
             self.actionNotice = "Restored to \(String(record.snapshot.oid.prefix(7))). Remote unchanged."
         }

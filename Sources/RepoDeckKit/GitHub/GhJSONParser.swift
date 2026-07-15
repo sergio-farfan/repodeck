@@ -74,8 +74,9 @@ public enum GhJSONParser {
     /// the PR's CI reports status:
     /// - a GitHub Actions (or App) **CheckRun**: `status` (QUEUED/
     ///   IN_PROGRESS/COMPLETED/...) + `conclusion` (SUCCESS/FAILURE/
-    ///   CANCELLED/TIMED_OUT/ACTION_REQUIRED/SKIPPED/...; empty string, not
-    ///   null, while `status` isn't yet COMPLETED);
+    ///   CANCELLED/TIMED_OUT/ACTION_REQUIRED/STARTUP_FAILURE/STALE/
+    ///   SKIPPED/...; empty string, not null, while `status` isn't yet
+    ///   COMPLETED);
     /// - a classic Commit-Status-API **StatusContext** (Jenkins, Buildkite,
     ///   etc.): `state` (SUCCESS/FAILURE/ERROR/PENDING/EXPECTED) and no
     ///   `conclusion` field at all.
@@ -121,8 +122,13 @@ public enum GhJSONParser {
             return false
         }
 
-        private static let failingConclusions: Set<String> = ["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"]
+        private static let failingConclusions: Set<String> = [
+            "FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE",
+        ]
         private static let failingStates: Set<String> = ["ERROR", "FAILURE"]
-        private static let pendingStatusOrState: Set<String> = ["PENDING", "QUEUED", "IN_PROGRESS"]
+        // "EXPECTED" is safe in this shared set even though it's only ever a
+        // StatusContext `state` value — a CheckRun's `status` field never
+        // emits it, so this can't misclassify a CheckRun as pending.
+        private static let pendingStatusOrState: Set<String> = ["PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED"]
     }
 }

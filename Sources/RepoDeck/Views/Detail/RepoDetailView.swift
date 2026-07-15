@@ -50,5 +50,18 @@ struct RepoDetailView: View {
                 await vm.refreshPRInfo(using: gh)
             }
         }
+        // `isGhAvailable` resolves asynchronously (an early `gh auth
+        // status` check) and typically settles AFTER `.task(id: vm.id)`
+        // has already run and skipped the PR refresh for the repo selected
+        // at launch — so that first repo would show no badge until a
+        // branch/repo change or push. Re-run the same guarded refresh once
+        // availability flips true. `refreshPRInfo`'s own TTL + in-flight
+        // guard de-dupes against the other two tasks, so this is harmless
+        // even when it's not the one that actually needed to fire.
+        .task(id: model.isGhAvailable) {
+            if model.isGhAvailable, let gh = model.gh {
+                await vm.refreshPRInfo(using: gh)
+            }
+        }
     }
 }

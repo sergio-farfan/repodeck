@@ -19,6 +19,16 @@ public struct GitError: Error, LocalizedError, Sendable {
             && (stderr.contains("non-fast-forward") || stderr.contains("fetch first"))
     }
 
+    /// True when this is `GitClient.restoreUndoSnapshot`'s "repository has
+    /// moved on since the snapshot" guard — the repo's HEAD changed (an
+    /// external commit, another sync) since the snapshot was taken, so the
+    /// recorded `UndoRecord` is now known-stale and safe to discard, unlike
+    /// a dirty-clobber refusal from `git reset --keep` itself, which the
+    /// caller should leave intact so the user can retry after cleaning up.
+    public var isMovedOnSinceSnapshot: Bool {
+        stderr.contains("moved on")
+    }
+
     public init(command: String, exitCode: Int32, stderr: String) {
         self.command = command
         self.exitCode = exitCode
