@@ -151,9 +151,14 @@ if [ "$RELEASE" -eq 1 ]; then
     } >> "$NOTES"
 
     SHA="$DMG_FINAL.sha256"
+    # A stably-named copy alongside the versioned asset, so
+    # .../releases/latest/download/RepoDeck.dmg is an evergreen direct link
+    # (the versioned name changes every release and would break it).
+    DMG_STABLE="$(dirname "$DMG_FINAL")/RepoDeck.dmg"
+    cp "$DMG_FINAL" "$DMG_STABLE"
     if gh release view "v$VER" >/dev/null 2>&1; then
-        gh release upload "v$VER" "$DMG_FINAL" "$SHA" --clobber
+        gh release upload "v$VER" "$DMG_FINAL" "$SHA" "$DMG_STABLE" --clobber
     else
-        gh release create "v$VER" "$DMG_FINAL" "$SHA" --title "RepoDeck $VER" --notes-file "$NOTES"
+        gh release create "v$VER" "$DMG_FINAL" "$SHA" "$DMG_STABLE" --title "RepoDeck $VER" --notes-file "$NOTES"
     fi
 fi

@@ -20,7 +20,7 @@ Track a few dozen local git repositories and one question gets hard to answer at
 
 ## Download
 
-**[Download the latest RepoDeck.dmg →](https://github.com/sergio-farfan/repodeck/releases/latest)**
+**[Download RepoDeck.dmg →](https://github.com/sergio-farfan/repodeck/releases/latest/download/RepoDeck.dmg)** (direct download; or browse the [latest release](https://github.com/sergio-farfan/repodeck/releases/latest))
 
 Open the `.dmg` and drag **RepoDeck** to **Applications**.
 
