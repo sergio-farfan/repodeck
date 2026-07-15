@@ -239,6 +239,44 @@ import Testing
         }
     }
 
+    @Test func unstageModifyHunkUsesTheProductionReversePairing() async throws {
+        // Pins the EXACT combination `RepoViewModel.unstageHunk` runs —
+        // PatchBuilder.patch(reverse: true) + applyPatch(reverse: false) —
+        // for a plain modify hunk (the common case). The other unstage test
+        // above uses a different pairing (patch:false + apply:true); this one
+        // proves the code path the UI actually takes.
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("file.txt")
+            let originalLines = (1...5).map { "line\($0)" }
+            try (originalLines.joined(separator: "\n") + "\n")
+                .write(to: fileURL, atomically: true, encoding: .utf8)
+            try await client.stageAll(in: repo)
+            try await client.commit(message: "feat: initial", in: repo)
+
+            var modifiedLines = originalLines
+            modifiedLines[2] = "line3-CHANGED"
+            try (modifiedLines.joined(separator: "\n") + "\n")
+                .write(to: fileURL, atomically: true, encoding: .utf8)
+            // Stage the change so there is a staged hunk to unstage.
+            try await client.stageAll(in: repo)
+            #expect(try await cachedDiffText("file.txt", in: repo).contains("line3-CHANGED"))
+
+            // Unstage it via the production pairing: build the reversed patch
+            // and apply it forward (NOT --reverse — that would double-reverse
+            // and git would reject it).
+            let stagedDiff = try #require(try await client.diff(path: "file.txt", staged: true, in: repo))
+            #expect(stagedDiff.hunks.count == 1)
+            let patch = PatchBuilder.patch(for: stagedDiff.hunks[0], in: stagedDiff, reverse: true)
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            // Index is back to HEAD; the edit survives as an unstaged change.
+            #expect(try await cachedDiffText("file.txt", in: repo).isEmpty)
+            let status = try await client.status(in: repo)
+            #expect(status.changes.filter { $0.area == .staged }.isEmpty)
+            #expect(status.changes.filter { $0.area == .unstaged }.map(\.path) == ["file.txt"])
+        }
+    }
+
     @Test func crlfHunkAppliesCleanly() async throws {
         try await withTempRepo { repo, client in
             let fileURL = repo.appendingPathComponent("crlf.txt")
