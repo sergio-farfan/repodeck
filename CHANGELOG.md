@@ -5,6 +5,12 @@ All notable changes to RepoDeck will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-07-15
+
+### Added
+
+- **In-window command runner** — a per-repo command pane docked under the detail view: toggle it with the terminal button in the sync bar, or right-click a repo → **Open Command Runner** (the existing **Open in Terminal** still opens Terminal.app). Commands run via your login shell in the repo's directory, with output streamed live in the app's monospace font and theme; ⏎ or **Run** executes, **Stop** terminates a running command, and ↑/↓ recall history. Each repo keeps its own bounded scrollback, and the pane's height is draggable and remembered. Not a terminal emulator — commands run to completion without a TTY (no `vim`/`htop`/interactive programs; stdin reads get EOF; **Stop** terminates the shell, so processes it already spawned may keep running) and ANSI colors are stripped to clean text.
+
 ## [1.5.0] - 2026-07-14
 
 ### Added
