@@ -96,6 +96,9 @@ struct FileChangeRow: View {
             openInTextEdit()
         }
         .contextMenu {
+            Button("View Diff") {
+                Task { await vm.showDiff(.workingFile(change)) }
+            }
             if editableFileURL != nil {
                 Button("Open in Editor") {
                     openInTextEdit()

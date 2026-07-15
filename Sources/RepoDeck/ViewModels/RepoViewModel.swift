@@ -13,6 +13,13 @@ struct UndoRecord {
     let description: String
 }
 
+/// What `showDiff(_:)` is currently (or was last) loading a diff for; a
+/// non-nil value drives the `.inspector` open via `isDiffPresented`.
+enum DiffTarget: Equatable {
+    case workingFile(FileChange)   // area decides staged/unstaged/untracked
+    case commit(Commit)
+}
+
 /// View model for a single tracked repo: owns its live status and the
 /// coalesced refresh that keeps it current.
 @MainActor
@@ -82,6 +89,30 @@ final class RepoViewModel: @MainActor Identifiable {
     /// within the TTL window would keep the previous branch's PR badge —
     /// and clicking it would open the wrong PR.
     private var prInfoBranch: String?
+
+    /// The file or commit `showDiff(_:)` is loading/loaded a diff for;
+    /// non-nil drives the read-only diff `.inspector` open on
+    /// `RepoDetailView` via `isDiffPresented`. Set to nil to dismiss.
+    var diffTarget: DiffTarget?
+    /// Rendered result of the most recent `showDiff(_:)` call; consumed by
+    /// `DiffView`.
+    var diffFiles: [FileDiff] = []
+    /// True while `showDiff(_:)`'s git call is in flight.
+    var isLoadingDiff = false
+    /// Set by a failed `showDiff(_:)`; shown inline inside the inspector —
+    /// deliberately NOT `actionError`, since a diff load must never disable
+    /// the git action buttons or paint `RepoDetailView`'s error banner.
+    var diffError: String?
+
+    /// Binding source for `.inspector(isPresented:)` on `RepoDetailView`:
+    /// true whenever `diffTarget` is set. The setter backs the inspector's
+    /// own dismiss chrome (its close button/swipe) — SwiftUI writes `false`
+    /// there, which this turns into clearing `diffTarget`; it never writes
+    /// `true` itself (that only happens via `showDiff(_:)`).
+    var isDiffPresented: Bool {
+        get { diffTarget != nil }
+        set { if !newValue { diffTarget = nil } }
+    }
 
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
     /// that arrives mid-refresh is folded into a single trailing refresh
@@ -227,6 +258,41 @@ final class RepoViewModel: @MainActor Identifiable {
     /// `refreshLog()`, and at the tail of every stash mutation below.
     func refreshStashes() async {
         stashes = (try? await client.stashList(in: repo.path)) ?? stashes
+    }
+
+    /// Loads the diff for `target` into `diffFiles`, driving `DiffView`
+    /// inside the `.inspector`. Read-only with its own guard — deliberately
+    /// NOT routed through `performAction`: a diff load must not disable the
+    /// git action buttons (`isBusy`) or paint `actionError`'s banner, so
+    /// failures land in `diffError` and are shown inline in the inspector
+    /// instead. Setting `diffTarget` up front is what opens the inspector
+    /// (via `isDiffPresented`), before the load even starts.
+    func showDiff(_ target: DiffTarget) async {
+        diffTarget = target
+        isLoadingDiff = true
+        diffError = nil
+        defer { isLoadingDiff = false }
+        do {
+            switch target {
+            case .workingFile(let change):
+                switch change.area {
+                case .staged:
+                    diffFiles = try await client.diff(path: change.path, staged: true, in: repo.path).map { [$0] } ?? []
+                case .unstaged, .unmerged:
+                    diffFiles = try await client.diff(path: change.path, staged: false, in: repo.path).map { [$0] } ?? []
+                case .untracked:
+                    diffFiles = try await client.diffUntracked(path: change.path, in: repo.path).map { [$0] } ?? []
+                }
+            case .commit(let commit):
+                diffFiles = try await client.diffCommit(commit.hash, in: repo.path)
+            }
+        } catch let error as GitError {
+            diffFiles = []
+            diffError = error.stderr.isEmpty ? "git exited \(error.exitCode)" : error.stderr
+        } catch {
+            diffFiles = []
+            diffError = error.localizedDescription
+        }
     }
 
     /// Refreshes `prInfo` from `gh pr list` for the current branch. Passive

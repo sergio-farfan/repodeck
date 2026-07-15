@@ -8,6 +8,9 @@ import SwiftUI
 struct CommitRow: View {
     @Environment(\.theme) private var theme
     let commit: Commit
+    /// Invoked from the context menu's "View Diff" item; the caller (
+    /// `HistoryListView`) wires this to `vm.showDiff(.commit(commit))`.
+    let onViewDiff: (Commit) -> Void
 
     /// Ref capsules beyond this count collapse into a single "+N" overflow
     /// capsule, keeping the row compact.
@@ -41,6 +44,9 @@ struct CommitRow: View {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .contextMenu {
+            Button("View Diff") {
+                onViewDiff(commit)
+            }
             Button("Copy Hash") {
                 copyToPasteboard(commit.hash)
             }

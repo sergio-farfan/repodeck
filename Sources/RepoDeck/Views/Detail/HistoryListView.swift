@@ -20,7 +20,9 @@ struct HistoryListView: View {
                 emptyState
             } else {
                 List(vm.commits) { commit in
-                    CommitRow(commit: commit)
+                    CommitRow(commit: commit, onViewDiff: { commit in
+                        Task { await vm.showDiff(.commit(commit)) }
+                    })
                 }
             }
         }

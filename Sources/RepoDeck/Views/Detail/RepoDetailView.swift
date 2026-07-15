@@ -33,7 +33,15 @@ struct RepoDetailView: View {
             }
         }
         .navigationTitle(vm.repo.name)
+        .inspector(isPresented: $vm.isDiffPresented) {
+            DiffView(vm: vm)
+                .inspectorColumnWidth(min: 320, ideal: 460, max: 800)
+        }
         .task(id: vm.id) {
+            // Clear any diff left open from a prior visit to this repo, so
+            // switching repos never leaves a stale (or just surprising)
+            // diff inspector open against the newly selected one.
+            vm.diffTarget = nil
             await vm.refreshLog()
             await vm.refreshStashes()
             if model.isGhAvailable, let gh = model.gh {
