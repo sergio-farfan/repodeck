@@ -170,6 +170,133 @@ public enum ProcessRunner {
     }
 }
 
+// MARK: - Streaming API
+
+/// Which pipe a streamed ``CommandEvent/output(stream:text:)`` chunk came from.
+public enum CommandStream: Sendable {
+    case stdout
+    case stderr
+}
+
+/// One event from ``ProcessRunner/runStreaming``: either a chunk of decoded
+/// output from stdout/stderr as it arrives, or the terminal exit code.
+public enum CommandEvent: Sendable {
+    case output(stream: CommandStream, text: String)
+    case exit(code: Int32)
+}
+
+extension ProcessRunner {
+    /// Launches `executable` with `arguments` in `workingDirectory` and yields
+    /// output as it arrives, finishing with a single `.exit(code:)` event, then
+    /// the stream completes. Cancelling the consuming task SIGTERMs the child
+    /// (same cancellation semantics as `run`). stdout and stderr are decoded as
+    /// UTF-8 (lossy) and yielded as `.output` chunks in arrival order; chunk
+    /// boundaries are NOT line-aligned (the caller reassembles lines).
+    ///
+    /// Reuses `run`'s internals (the `makeByteStream` pipe bridge, the
+    /// `TerminationSignal` actor, the shared `ConcurrencyLimiter`, the
+    /// concurrent stdout/stderr drain that avoids pipe-full deadlock) without
+    /// modifying `run` itself. Differences from `run`, by design: no output
+    /// cap (callers of a command-runner pane render/cap lazily), and no
+    /// git-specific environment hardening (that is `run`'s concern — the
+    /// caller of this primitive decides what env it needs).
+    public static func runStreaming(
+        _ executable: String,
+        arguments: [String],
+        workingDirectory: URL? = nil,
+        environment: [String: String] = [:],
+        priority: SubprocessPriority = .interactive
+    ) -> AsyncThrowingStream<CommandEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let producer = Task {
+                // Same slot discipline as `run`: acquire before launch,
+                // release on every exit path (success, throw, or cancel).
+                await limiter.acquire(priority)
+                defer { Task { await limiter.release(priority) } }
+
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = arguments
+                if let workingDirectory { process.currentDirectoryURL = workingDirectory }
+
+                // Inherit env, caller overrides win. Unlike `run`, this
+                // primitive does not force GIT_TERMINAL_PROMPT/LC_ALL — the
+                // caller decides what a given command needs.
+                var env = ProcessInfo.processInfo.environment
+                for (key, value) in environment { env[key] = value }
+                process.environment = env
+
+                // Never block on stdin: non-interactive, like `run`.
+                process.standardInput = FileHandle.nullDevice
+
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
+
+                let termination = TerminationSignal()
+                process.terminationHandler = { _ in
+                    Task { await termination.signal() }
+                }
+
+                do {
+                    try process.run()
+                } catch {
+                    // Bad executable etc.: finish the stream by throwing,
+                    // rather than emitting an `.exit`.
+                    continuation.finish(throwing: error)
+                    return
+                }
+
+                let pid = process.processIdentifier
+
+                let stdoutStream = makeByteStream(stdoutPipe.fileHandleForReading)
+                let stderrStream = makeByteStream(stderrPipe.fileHandleForReading)
+
+                await withTaskCancellationHandler {
+                    // Drain both pipes concurrently — the same
+                    // deadlock-avoidance as `run`, but yielding chunks into
+                    // the merged event stream instead of accumulating them.
+                    async let stdoutDone: Void = drainOutput(stdoutStream, as: .stdout, into: continuation)
+                    async let stderrDone: Void = drainOutput(stderrStream, as: .stderr, into: continuation)
+                    _ = await (stdoutDone, stderrDone)
+
+                    // Both pipes are at EOF; now block on actual exit.
+                    await termination.wait()
+                    continuation.yield(.exit(code: process.terminationStatus))
+                    continuation.finish()
+                } onCancel: {
+                    // Only the Sendable pid crosses into this @Sendable
+                    // closure. SIGTERM lets the pipes drain to EOF above,
+                    // exactly as `run` does; we do not throw on cancellation.
+                    kill(pid, SIGTERM)
+                }
+            }
+
+            // Fires when the consumer's iteration is cancelled (or the
+            // stream is otherwise torn down) — propagate that into the
+            // producer task so its `withTaskCancellationHandler` above
+            // fires and SIGTERMs the child. A no-op if the producer has
+            // already finished normally.
+            continuation.onTermination = { _ in
+                producer.cancel()
+            }
+        }
+    }
+}
+
+/// Drains a single pipe's byte stream into the shared `CommandEvent`
+/// continuation, tagging each chunk with its origin. Runs to EOF.
+private func drainOutput(
+    _ stream: AsyncStream<Data>,
+    as origin: CommandStream,
+    into continuation: AsyncThrowingStream<CommandEvent, Error>.Continuation
+) async {
+    for await chunk in stream {
+        continuation.yield(.output(stream: origin, text: String(decoding: chunk, as: UTF8.self)))
+    }
+}
+
 // MARK: - Pipe draining
 
 /// Bridges a readable `FileHandle` to a `Sendable` `AsyncStream<Data>`.
