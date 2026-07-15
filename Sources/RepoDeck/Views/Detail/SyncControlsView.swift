@@ -37,6 +37,14 @@ struct SyncControlsView: View {
             }
             .disabled(vm.isBusy || (vm.status?.dirtyCount ?? 0) == 0)
 
+            Button {
+                vm.toggleCommandPane()
+            } label: {
+                Label("Command Runner", systemImage: vm.isCommandPaneVisible ? "terminal.fill" : "terminal")
+            }
+            .tint(vm.isCommandPaneVisible ? theme.accent : nil)
+            .help("Command Runner")
+
             if vm.isBusy {
                 ProgressView()
                     .controlSize(.small)

@@ -12,24 +12,23 @@ struct RepoDetailView: View {
     /// global value (not per-repo); `RepoDetailView` is a plain `View`, so
     /// `@AppStorage` works here (unlike in the `@Observable` view models).
     @AppStorage("detail.changesFraction") private var changesFraction: Double = 0.5
+    /// Fraction of the whole detail pane given to the existing content when
+    /// the command-runner pane (below it) is visible; the runner gets the
+    /// rest. Same single-global-value reasoning as `changesFraction`.
+    @AppStorage("detail.commandFraction") private var commandFraction: Double = 0.7
 
     var body: some View {
         @Bindable var vm = vm
 
-        VStack(alignment: .leading, spacing: 0) {
-            ErrorBanner(error: $vm.actionError)
-            NoticeBanner(notice: $vm.actionNotice)
-
-            CommitBoxView(vm: vm)
-
-            SyncControlsView(vm: vm)
-
-            Divider()
-
-            VerticalSplit(fraction: $changesFraction) {
-                ChangesListView(vm: vm)
-            } bottom: {
-                HistoryListView(vm: vm)
+        Group {
+            if vm.isCommandPaneVisible {
+                VerticalSplit(fraction: $commandFraction) {
+                    detailContent
+                } bottom: {
+                    CommandRunnerView(vm: vm)
+                }
+            } else {
+                detailContent
             }
         }
         .navigationTitle(vm.repo.name)
@@ -69,6 +68,32 @@ struct RepoDetailView: View {
         .task(id: model.isGhAvailable) {
             if model.isGhAvailable, let gh = model.gh {
                 await vm.refreshPRInfo(using: gh)
+            }
+        }
+    }
+
+    /// The pre-existing detail pane content (banners, commit box, sync
+    /// controls, the Changes/History split) — factored out so it renders
+    /// identically whether or not the command-runner pane is docked below
+    /// it, instead of being duplicated across both branches of `body`.
+    @ViewBuilder
+    private var detailContent: some View {
+        @Bindable var vm = vm
+
+        VStack(alignment: .leading, spacing: 0) {
+            ErrorBanner(error: $vm.actionError)
+            NoticeBanner(notice: $vm.actionNotice)
+
+            CommitBoxView(vm: vm)
+
+            SyncControlsView(vm: vm)
+
+            Divider()
+
+            VerticalSplit(fraction: $changesFraction) {
+                ChangesListView(vm: vm)
+            } bottom: {
+                HistoryListView(vm: vm)
             }
         }
     }

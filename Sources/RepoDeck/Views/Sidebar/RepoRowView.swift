@@ -140,6 +140,11 @@ struct RepoRowView: View {
             )
         }
 
+        Button("Open Command Runner") {
+            model.selectedRepoID = vm.id
+            vm.isCommandPaneVisible = true
+        }
+
         if let vsCodeURL {
             Button("Open in VS Code") {
                 NSWorkspace.shared.open(

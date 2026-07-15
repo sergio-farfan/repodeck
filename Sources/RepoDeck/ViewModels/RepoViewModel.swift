@@ -114,6 +114,35 @@ final class RepoViewModel: @MainActor Identifiable {
         set { if !newValue { diffTarget = nil } }
     }
 
+    /// Whether the in-window command-runner pane (`CommandRunnerView`,
+    /// docked at the bottom of `RepoDetailView` via a nested `VerticalSplit`)
+    /// is shown for this repo. Toggled by `SyncControlsView`'s toolbar button
+    /// and set directly by the sidebar's "Open Command Runner" context-menu
+    /// item.
+    var isCommandPaneVisible = false
+    /// Accumulated, ANSI-stripped runner output: each command is echoed as
+    /// `"$ <cmd>"`, followed by its interleaved stdout/stderr, followed by
+    /// `"[exited N]"` when it exits non-zero (or `"[failed to run: ...]"` if
+    /// the shell itself couldn't be launched). Capped at
+    /// `Self.commandOutputCap` characters — see `appendOutput(_:)`.
+    private(set) var commandOutput: String = ""
+    /// Bound to `CommandRunnerView`'s input field.
+    var commandInput: String = ""
+    /// True while `runCommand()`'s child process is running. Deliberately
+    /// separate from `isBusy` — see `runCommand()`.
+    private(set) var isRunningCommand = false
+    /// Commands previously run, most-recent last. `CommandRunnerView` cycles
+    /// `commandInput` through this on up/down arrow; the cursor into it is
+    /// kept as `@State` in that view, not here.
+    private(set) var commandHistory: [String] = []
+    /// The task consuming `runCommand()`'s `ProcessRunner.runStreaming`
+    /// stream, so `cancelCommand()` has something to cancel — cancelling it
+    /// SIGTERMs the child (see `ProcessRunner.runStreaming`).
+    private var commandTask: Task<Void, Never>?
+    /// Upper bound on `commandOutput`'s length, in characters. Keeps memory
+    /// bounded against a chatty or long-lived command.
+    private static let commandOutputCap = 200_000
+
     /// Coalescing pair: only one `git status` runs per repo at a time. A call
     /// that arrives mid-refresh is folded into a single trailing refresh
     /// instead of piling up concurrent invocations.
@@ -597,6 +626,76 @@ final class RepoViewModel: @MainActor Identifiable {
     /// the drop.
     func stashDrop(_ index: Int) async {
         await performAction(refreshingStashes: true) { try await self.client.stashDrop(index, in: self.repo.path) }
+    }
+
+    func toggleCommandPane() {
+        isCommandPaneVisible.toggle()
+    }
+
+    /// Runs `commandInput` (trimmed) via the user's login shell in the
+    /// repo's directory, streaming its output into `commandOutput`. No-op if
+    /// blank or a command is already running.
+    ///
+    /// Deliberately NOT routed through `performAction`: this is not a git
+    /// mutation, so a running (or long-lived, or hung) command must never
+    /// disable the git action buttons (`isBusy`) or paint `actionError`'s
+    /// banner — it owns its own `isRunningCommand` state instead, the same
+    /// "own state, passive" shape as `refreshStashes()`/
+    /// `refreshPRInfo(using:)`.
+    func runCommand() {
+        let cmd = commandInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cmd.isEmpty, !isRunningCommand else { return }
+
+        commandHistory.append(cmd)
+        commandInput = ""
+        appendOutput("$ \(cmd)\n")
+
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        isRunningCommand = true
+        commandTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isRunningCommand = false
+                self.commandTask = nil
+            }
+            do {
+                let stream = ProcessRunner.runStreaming(
+                    shell, arguments: ["-lc", cmd], workingDirectory: self.repo.path, priority: .interactive
+                )
+                for try await event in stream {
+                    switch event {
+                    case .output(_, let text):
+                        self.appendOutput(AnsiStripper.strip(text))
+                    case .exit(let code):
+                        if code != 0 {
+                            self.appendOutput("[exited \(code)]\n")
+                        }
+                    }
+                }
+            } catch {
+                self.appendOutput("[failed to run: \(error)]\n")
+            }
+        }
+    }
+
+    /// Cancels the in-flight command, if any.
+    func cancelCommand() {
+        commandTask?.cancel()
+    }
+
+    /// Appends `text` to `commandOutput`, then — if that pushed it past
+    /// `Self.commandOutputCap` characters — drops from the front up to the
+    /// next line boundary, so the cap never splits a line mid-way.
+    private func appendOutput(_ text: String) {
+        commandOutput += text
+        let overflow = commandOutput.count - Self.commandOutputCap
+        guard overflow > 0 else { return }
+        let dropPoint = commandOutput.index(commandOutput.startIndex, offsetBy: overflow)
+        if let newline = commandOutput[dropPoint...].firstIndex(of: "\n") {
+            commandOutput.removeSubrange(commandOutput.startIndex...newline)
+        } else {
+            commandOutput.removeSubrange(commandOutput.startIndex..<dropPoint)
+        }
     }
 
     /// Background fetch on the scheduler's behalf: quietly refreshes remote
