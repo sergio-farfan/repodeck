@@ -16,6 +16,8 @@
 
 Track a few dozen local git repositories and one question gets hard to answer at a glance: which ones have uncommitted work, and which ones are behind their remote and need a pull? Finding out normally means opening each folder, one at a time, just to check. RepoDeck answers it for every tracked repo at once, in a single native window that stays current as files change on disk — no manual refresh, no per-repo client to open.
 
+> **Latest — 1.7.0:** stage and unstage individual hunks straight from the diff view. The 1.3–1.7 series also added per-repo auto-fetch, repo groups, a ⌘K command palette, auto-rebase on rejected pushes, undo for pulls, stash support, GitHub PR/CI badges, a menu-bar mode, and an in-window command runner — see [Releases & Roadmap](#releases--roadmap).
+
 ## Download
 
 **[Download the latest RepoDeck.dmg →](https://github.com/sergio-farfan/repodeck/releases/latest)**
@@ -75,6 +77,30 @@ The History search field matches against whichever scope is selected — Message
 | <kbd>⌘</kbd><kbd>R</kbd> | Refresh — rescan all tracked folders |
 | <kbd>⌘</kbd><kbd>,</kbd> | Open Settings — appearance, accent color, fonts, size |
 | <kbd>⌘</kbd><kbd>K</kbd> | Command Palette |
+
+## Releases & Roadmap
+
+Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are on the [releases page](https://github.com/sergio-farfan/repodeck/releases).
+
+| Version | Date | Highlights |
+|---------|------|------------|
+| [1.7.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.7.0) | 2026-07-15 | Hunk staging from the diff view — stage or unstage one hunk at a time |
+| [1.6.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.6.0) | 2026-07-15 | In-window command runner (login shell per repo, live output, history) |
+| [1.5.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.5.0) | 2026-07-14 | Diff view — unified diffs for files and commits in a side inspector |
+| [1.4.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.4.0) | 2026-07-14 | Undo for pull/auto-rebase, stash support, GitHub PR/CI badges, menu-bar mode |
+| [1.3.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.3.0) | 2026-07-14 | Repository Settings, per-repo auto-fetch, repo groups, ⌘K palette, auto-rebase on rejected push, network timeouts |
+| [1.2.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.2.0) | 2026-07-08 | Styled DMG installer, GitHub Releases distribution, redesigned icon |
+| [1.1.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.1.0) | 2026-07-08 | Themes + Settings window, draggable split, history search, app icon |
+| [1.0.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.0.0) | 2026-07-08 | Multi-repo dashboard: discovery, live status, stage/commit/sync, bulk fetch/pull |
+
+### Planned
+
+Unordered and undated — priorities shift with real-world use:
+
+- **Notarized builds** — remove the right-click-to-open step on first launch.
+- **File-mode fidelity for hunk staging** — carrying executable bits through diffs, so unstaging a staged delete of an executable leaves no residual mode change.
+- **PR review state on the badge** — surface approved / changes-requested next to the CI dot (already parsed, not yet shown).
+- **Command runner process groups** — make **Stop** also terminate child processes the shell already spawned.
 
 ## Build from source
 
