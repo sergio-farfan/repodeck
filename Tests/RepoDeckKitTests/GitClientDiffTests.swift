@@ -136,4 +136,86 @@ import Testing
             #expect(unwrapped.hunks.isEmpty)
         }
     }
+
+    // MARK: 8. A non-ASCII filename parses cleanly despite core.quotepath=true
+
+    /// Without the `-c core.quotepath=false` pin, git's default (with this
+    /// config forced on explicitly) octal-escapes and quotes the path —
+    /// `"a/\303\251.txt"` style — and `DiffParser` would parse that literal
+    /// escaped text as the path instead of the clean UTF-8 name. Exercises
+    /// all three diff entry points that carry the pin: `diffUntracked`
+    /// (untracked "café.txt"), `diff(staged: true)`, and `diff(staged:
+    /// false)` after a commit.
+    @Test func nonASCIIFilenameParsesCleanlyDespiteQuotepath() async throws {
+        try await withTempRepo { repo, client in
+            _ = try await ProcessRunner.run(arguments: ["-C", repo.path, "config", "core.quotepath", "true"])
+
+            let fileURL = repo.appendingPathComponent("café.txt")
+            try "hello\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+            let untracked = try await client.diffUntracked(path: "café.txt", in: repo)
+            let unwrappedUntracked = try #require(untracked)
+            #expect(unwrappedUntracked.newPath == "café.txt")
+            #expect(unwrappedUntracked.displayPath == "café.txt")
+
+            try await client.stage(["café.txt"], in: repo)
+            let staged = try await client.diff(path: "café.txt", staged: true, in: repo)
+            let unwrappedStaged = try #require(staged)
+            #expect(unwrappedStaged.newPath == "café.txt")
+            #expect(unwrappedStaged.oldPath == "/dev/null")
+
+            try await client.commit(message: "chore: add café", in: repo)
+            try "hello\nworld\n".write(to: fileURL, atomically: true, encoding: .utf8)
+            let unstaged = try await client.diff(path: "café.txt", staged: false, in: repo)
+            let unwrappedUnstaged = try #require(unstaged)
+            #expect(unwrappedUnstaged.oldPath == "café.txt")
+            #expect(unwrappedUnstaged.newPath == "café.txt")
+        }
+    }
+
+    // MARK: 9. diff.mnemonicPrefix=true does not produce a bogus rename
+
+    /// Without the `-c diff.mnemonicPrefix=false` pin, git emits `i/`/`w/`
+    /// prefixes instead of `a/`/`b/`; `DiffParser` reads those as distinct
+    /// old/new paths, so a plain modification of "base.txt" would parse as a
+    /// rename from "i/base.txt" to "w/base.txt".
+    @Test func mnemonicPrefixDoesNotProduceABogusRename() async throws {
+        try await withTempRepo { repo, client in
+            _ = try await ProcessRunner.run(arguments: ["-C", repo.path, "config", "diff.mnemonicPrefix", "true"])
+
+            try "base1\nCHANGED\nbase3\n".write(to: repo.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
+
+            let diff = try await client.diff(path: "base.txt", staged: false, in: repo)
+            let unwrapped = try #require(diff)
+            #expect(unwrapped.oldPath == "base.txt")
+            #expect(unwrapped.newPath == "base.txt")
+        }
+    }
+
+    // MARK: 10. Diff output exceeding diffOutputLimit throws instead of parsing a partial diff
+
+    /// Mirrors `GitClientIntegrationTests.truncatedStatusOutputDoesNotThrowAndReportsPartialResults`,
+    /// but diff's contract is the opposite of status's: a diff too large to
+    /// finish reading must never be handed to `DiffParser` as a
+    /// silently-partial hunk (8b builds byte-exact patches from this path),
+    /// so it throws instead of returning a partial `FileDiff`.
+    @Test func truncatedDiffOutputThrowsInsteadOfParsingAPartialDiff() async throws {
+        try await withTempRepo { repo, client in
+            var client = client
+            client.diffOutputLimit = 256
+
+            var content = ""
+            for i in 0..<200 {
+                content += "line\(i)\n"
+            }
+            try content.write(to: repo.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
+
+            do {
+                _ = try await client.diff(path: "base.txt", staged: false, in: repo)
+                Issue.record("expected GitError to be thrown for a diff exceeding diffOutputLimit")
+            } catch let error as GitError {
+                #expect(error.stderr.contains("too large"))
+            }
+        }
+    }
 }

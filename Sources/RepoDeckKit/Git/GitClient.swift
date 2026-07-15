@@ -36,6 +36,15 @@ public struct GitClient: Sendable {
     /// generating megabytes of fixture data.
     public var statusOutputLimit: Int = 4_000_000
 
+    /// Output cap (bytes) passed to `diff`/`diffUntracked`/`diffCommit`'s
+    /// `ProcessRunner.run` calls. Unlike `status`, a truncated diff is not
+    /// usable even partially (8b will build byte-exact patches from this
+    /// path), so the diff methods throw a `GitError` instead of returning a
+    /// partial parse — see their doc comments. Public so tests can shrink it
+    /// to exercise the truncation path without generating megabytes of
+    /// fixture data.
+    public var diffOutputLimit: Int = 10_000_000
+
     public init(gitPath: String = GitDefaults.gitPath) {
         self.gitPath = gitPath
     }
@@ -199,21 +208,51 @@ public struct GitClient: Sendable {
 
     // MARK: - Diff
 
+    /// `-c` pins prepended to every diff/show invocation below, ahead of the
+    /// subcommand, so filenames parse cleanly regardless of the user's own
+    /// `~/.gitconfig` (empirically, git 2.50.1):
+    /// - `core.quotepath=false` — the default (`true`) octal-escapes and
+    ///   quotes non-ASCII paths ("a/\343\203...") — `DiffParser` would parse
+    ///   that literally and show a bogus rename.
+    /// - `diff.noprefix=false` — `true` drops the `a/`/`b/` prefixes, and for
+    ///   constructs with no `---`/`+++` lines to fall back on (a pure rename
+    ///   with no content change, or a binary file), the `diff --git` line
+    ///   becomes the sole path source and unparseable — the file is silently
+    ///   dropped.
+    /// - `diff.mnemonicPrefix=false` — `true` emits `i/`/`w/`/`c/` prefixes
+    ///   instead of `a/`/`b/`, which `DiffParser` treats as distinct old/new
+    ///   paths — a plain modification renders as a bogus rename.
+    ///
+    /// Three explicit `-c` pairs (not `--default-prefix`) for robustness
+    /// across older git versions.
+    private static let diffConfigPins = [
+        "-c", "core.quotepath=false",
+        "-c", "diff.noprefix=false",
+        "-c", "diff.mnemonicPrefix=false",
+    ]
+
     /// Working-tree diff for one file. `staged=false` -> `git diff --no-ext-diff -- <path>`
     /// (unstaged); `staged=true` -> `git diff --no-ext-diff --staged -- <path>`. Untracked
     /// files have no diff target — callers detect untracked (via `status`) and use
     /// `diffUntracked` instead. `--no-ext-diff` keeps a user's configured external
     /// difftool from hijacking the output; no `--color` is passed, which is enough — git
-    /// only colors output for a TTY, and a piped subprocess never is one.
+    /// only colors output for a TTY, and a piped subprocess never is one. `diffConfigPins`
+    /// (see above) are prepended so path parsing is stable regardless of the user's config.
+    ///
+    /// Capped at `diffOutputLimit` bytes; a truncated result throws a `GitError` (see
+    /// `diffTooLargeError`) rather than parsing a partial diff.
     ///
     /// Returns `nil` when the parse yields no file (no changes for that path).
     public func diff(path: String, staged: Bool, in repo: URL) async throws -> FileDiff? {
-        var arguments = ["diff", "--no-ext-diff"]
+        var arguments = Self.diffConfigPins + ["diff", "--no-ext-diff"]
         if staged {
             arguments.append("--staged")
         }
         arguments += ["--", path]
-        let result = try await run(arguments, in: repo)
+        let result = try await run(arguments, in: repo, maxOutputBytes: diffOutputLimit)
+        if result.outputTruncated {
+            throw diffTooLargeError(arguments, in: repo)
+        }
         return DiffParser.parse(String(decoding: result.stdout, as: UTF8.self)).first
     }
 
@@ -222,12 +261,20 @@ public struct GitClient: Sendable {
     /// for an untracked file that is always true, so exit 1 is SUCCESS here, not failure;
     /// any other nonzero exit still throws. The returned `FileDiff`'s `newPath` is rewritten
     /// to the repo-relative `path` passed in, not whatever git echoes back on `+++`.
+    ///
+    /// Capped at `diffOutputLimit` bytes; a truncated result throws a `GitError` (see
+    /// `diffTooLargeError`) rather than parsing a partial diff.
     public func diffUntracked(path: String, in repo: URL) async throws -> FileDiff? {
+        let arguments = Self.diffConfigPins + ["diff", "--no-ext-diff", "--no-index", "--", "/dev/null", path]
         let result = try await run(
-            ["diff", "--no-ext-diff", "--no-index", "--", "/dev/null", path],
+            arguments,
             in: repo,
+            maxOutputBytes: diffOutputLimit,
             toleratedExitCodes: [1]
         )
+        if result.outputTruncated {
+            throw diffTooLargeError(arguments, in: repo)
+        }
         guard let diff = DiffParser.parse(String(decoding: result.stdout, as: UTF8.self)).first else {
             return nil
         }
@@ -238,9 +285,33 @@ public struct GitClient: Sendable {
     /// files' `FileDiff`s. The empty `--format=` suppresses the commit header/message,
     /// leaving just the diff. Merge commits show nothing by default from `git show` —
     /// acceptable for v1.
+    ///
+    /// Capped at `diffOutputLimit` bytes; a truncated result throws a `GitError` (see
+    /// `diffTooLargeError`) rather than parsing a partial diff.
     public func diffCommit(_ oid: String, in repo: URL) async throws -> [FileDiff] {
-        let result = try await run(["show", "--no-ext-diff", "--format=", oid], in: repo)
+        let arguments = Self.diffConfigPins + ["show", "--no-ext-diff", "--format=", oid]
+        let result = try await run(arguments, in: repo, maxOutputBytes: diffOutputLimit)
+        if result.outputTruncated {
+            throw diffTooLargeError(arguments, in: repo)
+        }
         return DiffParser.parse(String(decoding: result.stdout, as: UTF8.self))
+    }
+
+    /// Shared "diff too large" error for the three diff methods above, thrown
+    /// when `run`'s `outputTruncated` comes back true. `run` treats
+    /// truncation as a non-error result (needed by `status`, which returns a
+    /// partial-but-usable parse) — but an unbounded diff (a 50k-line lockfile
+    /// diff) both risks freezing the UI and, since 8b will build byte-exact
+    /// patches from this exact parse path, must never be handed to
+    /// `DiffParser` as a silently-partial hunk. `command` mirrors `run`'s own
+    /// `commandString(fullArguments)` (the `-C <repo>`-prefixed argv that was
+    /// actually executed) so the thrown error reads like any other `GitError`.
+    private func diffTooLargeError(_ arguments: [String], in repo: URL) -> GitError {
+        GitError(
+            command: commandString(["-C", repo.path] + arguments),
+            exitCode: -1,
+            stderr: "diff too large to display (over \(diffOutputLimit / 1_000_000) MB)"
+        )
     }
 
     // MARK: - Undo snapshots
@@ -409,9 +480,13 @@ public struct GitClient: Sendable {
         }
         // `ProcessRunner` enforces `maxOutputBytes` by SIGTERM-ing the child,
         // which makes `terminationStatus` a nonzero signal exit (15) rather
-        // than 0 — that is expected, not a failure. Only `status` passes
-        // `maxOutputBytes`, so this can't mask a real failure of any other
-        // command.
+        // than 0 — that is expected, not a failure. Only `status` and the
+        // `diff`/`diffUntracked`/`diffCommit` methods pass `maxOutputBytes`,
+        // so this can't mask a real failure of any other command. Unlike
+        // `status` (which hands a truncated-but-partial parse to
+        // `PorcelainParser`), the diff methods treat `outputTruncated` as
+        // their own throw condition after this returns — see
+        // `diffTooLargeError`.
         guard result.exitCode == 0 || result.outputTruncated || toleratedExitCodes.contains(result.exitCode) else {
             throw GitError(
                 command: commandString(fullArguments),

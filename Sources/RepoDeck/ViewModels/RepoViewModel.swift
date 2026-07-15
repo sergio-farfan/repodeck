@@ -143,6 +143,13 @@ final class RepoViewModel: @MainActor Identifiable {
     /// best-effort measure (it can't stop an already-running git subprocess).
     private var historyGeneration = 0
 
+    /// Same guarantee as `historyGeneration`, for `showDiff(_:)`: two rapid
+    /// "View Diff" clicks (e.g. file A then file B) each capture their own
+    /// generation, and whichever git call resolves last only wins if it's
+    /// still the current one — otherwise an older, slower load for A can't
+    /// clobber `diffFiles` after a newer load for B already started.
+    private var diffGeneration = 0
+
     var id: String { repo.id }
 
     /// True when `status` has at least one change staged for commit.
@@ -267,32 +274,56 @@ final class RepoViewModel: @MainActor Identifiable {
     /// failures land in `diffError` and are shown inline in the inspector
     /// instead. Setting `diffTarget` up front is what opens the inspector
     /// (via `isDiffPresented`), before the load even starts.
+    ///
+    /// `.unmerged` is special-cased with no git call at all: a conflicted
+    /// file's working-tree diff is combined-diff format (`diff --cc`,
+    /// `@@@`), which `DiffParser` returns `[]` for — routing it through
+    /// `client.diff` would land on the empty-state "No Changes to Show",
+    /// which reads as if the conflict resolved itself. `diffError` carries
+    /// an explicit explanation instead.
+    ///
+    /// Guarded by `diffGeneration` (mirrors `refreshLog()`'s
+    /// `historyGeneration`): two rapid "View Diff" clicks each capture their
+    /// own generation before the single await below, and the result — the
+    /// local `files`/`message`, computed but not yet written to
+    /// `diffFiles`/`diffError`/`isLoadingDiff` — is only committed if this
+    /// call's generation is still current AND `diffTarget` still matches
+    /// what was requested; otherwise a newer request has already superseded
+    /// it and this one's result is silently dropped, however late it
+    /// resolves.
     func showDiff(_ target: DiffTarget) async {
+        diffGeneration += 1
+        let generation = diffGeneration
         diffTarget = target
         isLoadingDiff = true
         diffError = nil
-        defer { isLoadingDiff = false }
+        var files: [FileDiff] = []
+        var message: String?
         do {
             switch target {
             case .workingFile(let change):
                 switch change.area {
                 case .staged:
-                    diffFiles = try await client.diff(path: change.path, staged: true, in: repo.path).map { [$0] } ?? []
-                case .unstaged, .unmerged:
-                    diffFiles = try await client.diff(path: change.path, staged: false, in: repo.path).map { [$0] } ?? []
+                    files = try await client.diff(path: change.path, staged: true, in: repo.path).map { [$0] } ?? []
+                case .unstaged:
+                    files = try await client.diff(path: change.path, staged: false, in: repo.path).map { [$0] } ?? []
                 case .untracked:
-                    diffFiles = try await client.diffUntracked(path: change.path, in: repo.path).map { [$0] } ?? []
+                    files = try await client.diffUntracked(path: change.path, in: repo.path).map { [$0] } ?? []
+                case .unmerged:
+                    message = "Conflicted file — resolve the conflict to view its diff."
                 }
             case .commit(let commit):
-                diffFiles = try await client.diffCommit(commit.hash, in: repo.path)
+                files = try await client.diffCommit(commit.hash, in: repo.path)
             }
         } catch let error as GitError {
-            diffFiles = []
-            diffError = error.stderr.isEmpty ? "git exited \(error.exitCode)" : error.stderr
+            message = error.stderr.isEmpty ? "git exited \(error.exitCode)" : error.stderr
         } catch {
-            diffFiles = []
-            diffError = error.localizedDescription
+            message = error.localizedDescription
         }
+        guard generation == diffGeneration, diffTarget == target else { return }
+        diffFiles = files
+        diffError = message
+        isLoadingDiff = false
     }
 
     /// Refreshes `prInfo` from `gh pr list` for the current branch. Passive
