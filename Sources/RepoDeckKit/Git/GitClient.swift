@@ -197,6 +197,52 @@ public struct GitClient: Sendable {
         try await runVoid(["stash", "drop", Self.stashSelector(index)], in: repo)
     }
 
+    // MARK: - Diff
+
+    /// Working-tree diff for one file. `staged=false` -> `git diff --no-ext-diff -- <path>`
+    /// (unstaged); `staged=true` -> `git diff --no-ext-diff --staged -- <path>`. Untracked
+    /// files have no diff target — callers detect untracked (via `status`) and use
+    /// `diffUntracked` instead. `--no-ext-diff` keeps a user's configured external
+    /// difftool from hijacking the output; no `--color` is passed, which is enough — git
+    /// only colors output for a TTY, and a piped subprocess never is one.
+    ///
+    /// Returns `nil` when the parse yields no file (no changes for that path).
+    public func diff(path: String, staged: Bool, in repo: URL) async throws -> FileDiff? {
+        var arguments = ["diff", "--no-ext-diff"]
+        if staged {
+            arguments.append("--staged")
+        }
+        arguments += ["--", path]
+        let result = try await run(arguments, in: repo)
+        return DiffParser.parse(String(decoding: result.stdout, as: UTF8.self)).first
+    }
+
+    /// `git diff --no-ext-diff --no-index -- /dev/null <path>` for an untracked file, so it
+    /// shows as an all-addition diff. `--no-index` exits 1 whenever the two sides differ —
+    /// for an untracked file that is always true, so exit 1 is SUCCESS here, not failure;
+    /// any other nonzero exit still throws. The returned `FileDiff`'s `newPath` is rewritten
+    /// to the repo-relative `path` passed in, not whatever git echoes back on `+++`.
+    public func diffUntracked(path: String, in repo: URL) async throws -> FileDiff? {
+        let result = try await run(
+            ["diff", "--no-ext-diff", "--no-index", "--", "/dev/null", path],
+            in: repo,
+            toleratedExitCodes: [1]
+        )
+        guard let diff = DiffParser.parse(String(decoding: result.stdout, as: UTF8.self)).first else {
+            return nil
+        }
+        return FileDiff(oldPath: diff.oldPath, newPath: path, isBinary: diff.isBinary, hunks: diff.hunks)
+    }
+
+    /// `git show --no-ext-diff --format= <oid>` unified diff for a whole commit -> all
+    /// files' `FileDiff`s. The empty `--format=` suppresses the commit header/message,
+    /// leaving just the diff. Merge commits show nothing by default from `git show` —
+    /// acceptable for v1.
+    public func diffCommit(_ oid: String, in repo: URL) async throws -> [FileDiff] {
+        let result = try await run(["show", "--no-ext-diff", "--format=", oid], in: repo)
+        return DiffParser.parse(String(decoding: result.stdout, as: UTF8.self))
+    }
+
     // MARK: - Undo snapshots
     //
     // One-level undo for the two operations where RepoDeck itself rewrites
@@ -326,13 +372,19 @@ public struct GitClient: Sendable {
     /// timeout is never treated as success — with a `GitError.stderr` that
     /// leads with "timed out after \(seconds)s" followed by the child's own
     /// stderr (if any) on a new line.
+    /// `toleratedExitCodes` lets a caller treat specific nonzero exits as
+    /// success without losing the captured stdout — needed by
+    /// `diffUntracked`, where `git diff --no-index` exits 1 (not 0) whenever
+    /// the two sides differ, which for an untracked file is the expected,
+    /// successful case, not a failure.
     private func run(
         _ arguments: [String],
         in repo: URL,
         environment: [String: String] = [:],
         maxOutputBytes: Int? = nil,
         priority: SubprocessPriority = .interactive,
-        timeout: Duration? = nil
+        timeout: Duration? = nil,
+        toleratedExitCodes: Set<Int32> = []
     ) async throws -> ProcessResult {
         let fullArguments = ["-C", repo.path] + arguments
         let result = try await ProcessRunner.run(
@@ -360,7 +412,7 @@ public struct GitClient: Sendable {
         // than 0 — that is expected, not a failure. Only `status` passes
         // `maxOutputBytes`, so this can't mask a real failure of any other
         // command.
-        guard result.exitCode == 0 || result.outputTruncated else {
+        guard result.exitCode == 0 || result.outputTruncated || toleratedExitCodes.contains(result.exitCode) else {
             throw GitError(
                 command: commandString(fullArguments),
                 exitCode: result.exitCode,
