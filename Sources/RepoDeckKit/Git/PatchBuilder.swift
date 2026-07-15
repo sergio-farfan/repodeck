@@ -16,6 +16,9 @@ public enum PatchBuilder {
     ///   "diff --git a/<real-old> b/<real-new>" (ALWAYS the real filename on
     ///     both sides, even for an add/delete — git never puts /dev/null here)
     ///   "new file mode 100644" (add only) or "deleted file mode 100644" (delete only)
+    ///     — "add"/"delete" here is evaluated on the DIRECTION this call
+    ///     produces: under `reverse`, an add's FileDiff yields a delete-shaped
+    ///     patch (and vice versa), since undoing an add IS a delete
     ///   "--- a/<old>"  (or "--- /dev/null" for an added file)
     ///   "+++ b/<new>"  (or "+++ /dev/null" for a deleted file)
     ///   the recomputed "@@ -oldStart,oldCount +newStart,newCount @@" header
@@ -55,13 +58,31 @@ public enum PatchBuilder {
         // The `diff --git` line NEVER carries `/dev/null` on either side —
         // git always names the real file with `a/`/`b/` prefixes there, even
         // for an add or a delete (only the `---`/`+++` lines below use
-        // `/dev/null`, to mark "this side doesn't exist"). For a modify,
-        // oldPath == newPath so this is a no-op; for an add, both sides
-        // become newPath; for a delete, both become oldPath.
-        let isAdd = file.oldPath == "/dev/null"
-        let isDelete = file.newPath == "/dev/null"
-        let realOld = isAdd ? file.newPath : file.oldPath
-        let realNew = isDelete ? file.oldPath : file.newPath
+        // `/dev/null`, to mark "this side doesn't exist"). This is about
+        // identifying the ONE real file involved, which `reverse` never
+        // changes — for a modify, oldPath == newPath so this is a no-op;
+        // for an add, both sides become newPath; for a delete, both become
+        // oldPath.
+        let rawIsAdd = file.oldPath == "/dev/null"
+        let rawIsDelete = file.newPath == "/dev/null"
+        let realOld = rawIsAdd ? file.newPath : file.oldPath
+        let realNew = rawIsDelete ? file.oldPath : file.newPath
+
+        // Unlike `realOld`/`realNew` above, the MODE LINE and the
+        // `---`/`+++` headers describe the patch's DIRECTION, which `reverse`
+        // does flip: reversing a delete (real -> /dev/null) yields a patch
+        // that adds the file back (/dev/null -> real), and reversing an add
+        // yields one that deletes it. Swapping old/new here — mirroring the
+        // oldStart/newStart swap above — before re-deriving isAdd/isDelete
+        // is what keeps the mode line and the /dev/null side consistent
+        // with the swapped +/- markers below; getting this wrong produces a
+        // patch `git apply` rejects (e.g. "deleted file ... still has
+        // contents" when the mode line says "deleted" but the body adds a
+        // line).
+        let effectiveOldPath = reverse ? file.newPath : file.oldPath
+        let effectiveNewPath = reverse ? file.oldPath : file.newPath
+        let isAdd = effectiveOldPath == "/dev/null"
+        let isDelete = effectiveNewPath == "/dev/null"
 
         var output: [String] = [
             "diff --git a/\(realOld) b/\(realNew)",
@@ -77,8 +98,8 @@ public enum PatchBuilder {
         } else if isDelete {
             output.append("deleted file mode 100644")
         }
-        output.append("--- \(headerPath(file.oldPath, prefix: "a/"))")
-        output.append("+++ \(headerPath(file.newPath, prefix: "b/"))")
+        output.append("--- \(headerPath(effectiveOldPath, prefix: "a/"))")
+        output.append("+++ \(headerPath(effectiveNewPath, prefix: "b/"))")
         output.append("@@ -\(oldStart),\(finalOldCount) +\(newStart),\(finalNewCount) @@")
 
         for line in hunk.lines {

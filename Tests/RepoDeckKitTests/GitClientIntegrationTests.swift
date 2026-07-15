@@ -380,4 +380,96 @@ import Testing
             #expect(staged.contains("-hello"))
         }
     }
+
+    // MARK: 13. Fix-forward — unstaging a staged whole-file DELETE/ADD by hunk
+    //
+    // 8b-1 review flagged PatchBuilder's `reverse` + add/delete combination
+    // (the path `unstageHunk` reaches when the diff inspector shows a staged
+    // whole-file add or delete) as untested. It reveals two things, both
+    // fixed here rather than in the VM:
+    //
+    // 1. A real PatchBuilder bug: `isAdd`/`isDelete` (and the `---`/`+++`
+    //    headers) were computed from the FileDiff's raw old/new paths,
+    //    ignoring `reverse` — so a reversed delete kept the "deleted file
+    //    mode" line and the `/dev/null` side unchanged, even though the
+    //    hunk body's markers HAD flipped to describe an add. `git apply`
+    //    rejects the mismatch ("deleted file ... still has contents").
+    //    Fixed in `PatchBuilder.patch` by deriving the mode line and headers
+    //    from `reverse`-swapped old/new paths (see `effectiveOldPath`/
+    //    `effectiveNewPath`), while the `diff --git` line's real filename
+    //    (unaffected by direction) still comes from the raw paths.
+    //
+    // 2. A spec bug, caught only by actually running `git apply`: pairing
+    //    `PatchBuilder.patch(reverse: true)` with
+    //    `applyPatch(reverse: true)` is a double reversal — even with (1)
+    //    fixed, `git apply --reverse` on an already-reverse-built patch
+    //    fails ("does not exist in index" / context mismatch), verified by
+    //    hand against real git before writing this test. The patch built
+    //    with `reverse: true` already IS the inverse hunk, so it must be
+    //    applied PLAIN (`reverse: false`) — that combination is what these
+    //    tests (and `unstageHunk`) actually use.
+
+    @Test func reverseUnstagesAStagedWholeFileDeletionWithoutABogusDevNullPath() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("old.txt")
+            try "hello\n".write(to: fileURL, atomically: true, encoding: .utf8)
+            try await client.stageAll(in: repo)
+            try await client.commit(message: "feat: initial", in: repo)
+
+            try FileManager.default.removeItem(at: fileURL)
+            try await client.stage(["old.txt"], in: repo)
+
+            let stagedStatus = try await client.status(in: repo)
+            let staged = try #require(stagedStatus.changes.first { $0.area == .staged && $0.path == "old.txt" })
+            #expect(staged.statusLetter == "D")
+
+            let fileDiff = try #require(try await client.diff(path: "old.txt", staged: true, in: repo))
+            #expect(fileDiff.oldPath == "old.txt")
+            #expect(fileDiff.newPath == "/dev/null")
+            #expect(fileDiff.hunks.count == 1)
+            let hunk = fileDiff.hunks[0]
+
+            let patch = PatchBuilder.patch(for: hunk, in: fileDiff, reverse: true)
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            let status = try await client.status(in: repo)
+            #expect(status.changes.first { $0.area == .staged } == nil)
+            let unstaged = try #require(status.changes.first { $0.area == .unstaged && $0.path == "old.txt" })
+            #expect(unstaged.statusLetter == "D")
+
+            let paths = try await cachedPaths(in: repo)
+            #expect(paths.contains("old.txt"))
+            #expect(!paths.contains { $0.contains("dev/null") })
+        }
+    }
+
+    @Test func reverseUnstagesAStagedNewFileAddWithoutABogusDevNullPath() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("new.txt")
+            try "hello\n".write(to: fileURL, atomically: true, encoding: .utf8)
+            try await client.stage(["new.txt"], in: repo)
+
+            let stagedStatus = try await client.status(in: repo)
+            let staged = try #require(stagedStatus.changes.first { $0.area == .staged && $0.path == "new.txt" })
+            #expect(staged.statusLetter == "A")
+
+            let fileDiff = try #require(try await client.diff(path: "new.txt", staged: true, in: repo))
+            #expect(fileDiff.oldPath == "/dev/null")
+            #expect(fileDiff.newPath == "new.txt")
+            #expect(fileDiff.hunks.count == 1)
+            let hunk = fileDiff.hunks[0]
+
+            let patch = PatchBuilder.patch(for: hunk, in: fileDiff, reverse: true)
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            let status = try await client.status(in: repo)
+            #expect(status.changes.first { $0.area == .staged } == nil)
+            let untracked = try #require(status.changes.first { $0.area == .untracked && $0.path == "new.txt" })
+            #expect(untracked.statusLetter == "U")
+
+            let paths = try await cachedPaths(in: repo)
+            #expect(!paths.contains("new.txt"))
+            #expect(!paths.contains { $0.contains("dev/null") })
+        }
+    }
 }

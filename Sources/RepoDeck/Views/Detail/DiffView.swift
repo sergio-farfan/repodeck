@@ -73,13 +73,43 @@ struct DiffView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(file.hunks) { hunk in
-                    Text(hunk.header)
-                        .font(theme.mono(10))
-                        .foregroundStyle(.secondary)
+                    hunkHeader(hunk, file: file)
                     ForEach(hunk.lines, id: \.self) { line in
                         DiffLineRow(line: line)
                     }
                 }
+            }
+        }
+    }
+
+    /// A hunk's `@@` header, plus — when `vm.diffHunkAction` says this diff
+    /// supports it (an unstaged or staged working-file diff; never a commit
+    /// diff) — a small Stage/Unstage button that mirrors
+    /// `FileChangeRow`'s whole-file action button: icon-only
+    /// (`plus.circle`/`minus.circle`), `.borderless`, disabled while
+    /// `vm.isBusy`, with the direction's name as the tooltip. The read-only
+    /// gutter/tint rendering below is unchanged either way.
+    @ViewBuilder
+    private func hunkHeader(_ hunk: Hunk, file: FileDiff) -> some View {
+        HStack {
+            Text(hunk.header)
+                .font(theme.mono(10))
+                .foregroundStyle(.secondary)
+            Spacer()
+            if let action = vm.diffHunkAction {
+                Button {
+                    Task {
+                        switch action {
+                        case .stage: await vm.stageHunk(hunk, in: file)
+                        case .unstage: await vm.unstageHunk(hunk, in: file)
+                        }
+                    }
+                } label: {
+                    Image(systemName: action == .stage ? "plus.circle" : "minus.circle")
+                }
+                .buttonStyle(.borderless)
+                .disabled(vm.isBusy)
+                .help(action == .stage ? "Stage Hunk" : "Unstage Hunk")
             }
         }
     }

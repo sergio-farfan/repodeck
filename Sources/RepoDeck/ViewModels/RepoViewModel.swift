@@ -20,6 +20,13 @@ enum DiffTarget: Equatable {
     case commit(Commit)
 }
 
+/// Which direction (if any) a per-hunk button in `DiffView` should offer,
+/// driven by `RepoViewModel.diffHunkAction`.
+enum HunkAction {
+    case stage
+    case unstage
+}
+
 /// View model for a single tracked repo: owns its live status and the
 /// coalesced refresh that keeps it current.
 @MainActor
@@ -112,6 +119,22 @@ final class RepoViewModel: @MainActor Identifiable {
     var isDiffPresented: Bool {
         get { diffTarget != nil }
         set { if !newValue { diffTarget = nil } }
+    }
+
+    /// Which per-hunk button (if any) `DiffView` should render for the
+    /// CURRENT `diffTarget`, so it doesn't re-derive the gating rule itself.
+    /// Hunk staging only applies to a working-tree file's unstaged or staged
+    /// diff — a commit diff is read-only (can't stage a historical hunk),
+    /// and untracked/unmerged have no hunks worth a button (untracked stages
+    /// whole-file via the existing Changes-list control; unmerged shows the
+    /// resolve-conflict message instead of a diff).
+    var diffHunkAction: HunkAction? {
+        guard case let .workingFile(change) = diffTarget else { return nil }
+        switch change.area {
+        case .unstaged: return .stage
+        case .staged: return .unstage
+        case .untracked, .unmerged: return nil
+        }
     }
 
     /// Whether the in-window command-runner pane (`CommandRunnerView`,
@@ -356,6 +379,47 @@ final class RepoViewModel: @MainActor Identifiable {
         diffFiles = files
         diffError = message
         isLoadingDiff = false
+    }
+
+    /// Stages one hunk (from the unstaged working-tree diff shown by
+    /// `showDiff`) into the index: `PatchBuilder` builds the patch AS the
+    /// unstaged diff represents it (`reverse: false`), and `applyPatch`
+    /// applies it plain (`cached: true, reverse: false`) — this IS an index
+    /// mutation, so it goes through `performAction` (busy-guard,
+    /// `actionError` banner on failure such as "patch does not apply",
+    /// status refresh). After the index changes, the diff inspector is
+    /// reloaded for the same target so the staged hunk disappears from the
+    /// unstaged diff (a now-empty diff shows the empty state) while any
+    /// other hunks in the file stay put.
+    func stageHunk(_ hunk: Hunk, in file: FileDiff) async {
+        let patch = PatchBuilder.patch(for: hunk, in: file, reverse: false)
+        await performAction {
+            try await self.client.applyPatch(patch, cached: true, reverse: false, in: self.repo.path)
+        }
+        if let target = diffTarget {
+            await showDiff(target)
+        }
+    }
+
+    /// Unstages one hunk (from the staged diff shown by `showDiff`) back out
+    /// of the index. `PatchBuilder` builds the INVERSE hunk (`reverse:
+    /// true`) — this is the direction that reaches the add/delete path a
+    /// prior review flagged as untested (fixed and covered by the
+    /// fix-forward tests in `GitClientIntegrationTests`). That inverse patch
+    /// is already correctly oriented to turn the current index content back
+    /// into HEAD's, so `applyPatch` applies it PLAIN (`cached: true,
+    /// reverse: false`) — NOT `reverse: true`: pairing a reverse-BUILT patch
+    /// with `git apply --reverse` is a double reversal that `git apply`
+    /// rejects (verified against real git; see the fix-forward tests' doc
+    /// comment). Same `performAction` + diff-reload shape as `stageHunk`.
+    func unstageHunk(_ hunk: Hunk, in file: FileDiff) async {
+        let patch = PatchBuilder.patch(for: hunk, in: file, reverse: true)
+        await performAction {
+            try await self.client.applyPatch(patch, cached: true, reverse: false, in: self.repo.path)
+        }
+        if let target = diffTarget {
+            await showDiff(target)
+        }
     }
 
     /// Refreshes `prInfo` from `gh pr list` for the current branch. Passive
