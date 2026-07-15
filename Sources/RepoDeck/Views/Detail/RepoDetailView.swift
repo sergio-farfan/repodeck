@@ -20,16 +20,15 @@ struct RepoDetailView: View {
     var body: some View {
         @Bindable var vm = vm
 
-        Group {
-            if vm.isCommandPaneVisible {
-                VerticalSplit(fraction: $commandFraction) {
-                    detailContent
-                } bottom: {
-                    CommandRunnerView(vm: vm)
-                }
-            } else {
-                detailContent
-            }
+        // Always route through `VerticalSplit`, toggling `isSplit`, so the
+        // command pane docks/undocks by collapsing the split rather than by
+        // moving `detailContent` in and out of the tree — which would reset
+        // the Changes/History scroll positions and other `@State` on every
+        // toggle (see `VerticalSplit`'s note).
+        VerticalSplit(fraction: $commandFraction, isSplit: vm.isCommandPaneVisible) {
+            detailContent
+        } bottom: {
+            CommandRunnerView(vm: vm)
         }
         .navigationTitle(vm.repo.name)
         .inspector(isPresented: $vm.isDiffPresented) {
