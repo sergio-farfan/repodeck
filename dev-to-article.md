@@ -2,6 +2,8 @@ I have somewhere around thirty git repositories checked out on my Mac at any giv
 
 So I built **RepoDeck** — a native macOS dashboard that tracks a set of folders, recursively finds every git repository underneath them, and shows you at a glance which ones need attention.
 
+> *Updated July 2026:* five releases have shipped since this was written. The feature list below is current, and [Five Releases Later](#five-releases-later) at the end covers what changed — per-repo auto-fetch, repo groups, a ⌘K palette, a diff view with hunk staging, an in-window command runner — plus the three bugs that only testing against real git caught.
+
 ![RepoDeck dashboard](https://raw.githubusercontent.com/sergio-farfan/repodeck/648ec69/docs/screenshot.png)
 
 ---
@@ -11,10 +13,15 @@ So I built **RepoDeck** — a native macOS dashboard that tracks a set of folder
 - **Multi-repo dashboard** — track any set of folders; RepoDeck recursively discovers every git repo underneath them
 - **Live status via FSEvents** — no polling, no timers; the sidebar badge updates the moment a file changes on disk
 - **Stage, commit, and sync** — pull, push, and fetch per repo, plus **Fetch All** / **Pull All** across every tracked repo at once
+- **Diff view with hunk staging** — unified diffs for files and commits in a side inspector; stage or unstage one hunk at a time
+- **Per-repo auto-fetch** — each repo on its own interval, on a background lane that never delays anything you do yourself
+- **Auto-rebase on rejected push** — opt-in per repo: a rejected push runs `git pull --rebase --autostash` and retries once
+- **Undo for pull and auto-rebase** — HEAD snapshotted to a ref first; restore with `git reset --keep`, never `--hard`
+- **Repo groups, pinning, and a ⌘K command palette** for getting around a big sidebar fast
+- **Stash support**, **GitHub PR/CI badges** (via `gh`, entirely optional), and an optional **menu-bar mode**
+- **In-window command runner** — a docked pane running shell commands in the repo's directory, output streamed live
 - **History search** by commit message, author, file path, or content (git's pickaxe search)
-- **Sidebar filter and pinning** for the repos you touch most often
 - **Themes** — System/Light/Dark, custom accent color, fonts, and font size (⌘,)
-- **Resizable Changes/History split**, so you can give more room to whichever pane you're using
 
 ---
 
@@ -128,6 +135,8 @@ static let limiter = ConcurrencyLimiter(limit: concurrencyLimit)
 
 Every `ProcessRunner.run` call acquires a slot before launching and releases it on every exit path — success, failure, or cancellation.
 
+(Since 1.3.0 that semaphore is two-tier: background work — auto-fetch, PR/CI polling — can hold at most 4 of the 6 slots, and interactive work you triggered jumps ahead of queued background work. Network calls also carry a `SIGTERM`-then-`SIGKILL` watchdog timeout, so a hung remote can't pin a slot forever.)
+
 ### Cancellation kills the child, not just the `Task`
 
 Cancelling the surrounding Swift `Task` — closing a repo, navigating away mid-fetch — has to actually kill the git process, not just stop awaiting it and leave it running orphaned in the background:
@@ -217,6 +226,22 @@ let status = try await client.status(in: repo)
 ```
 
 The lesson stuck: when two components are each individually correct and each individually tested, that says nothing about the seam between them. A whole-codebase review pass is what caught it — not either of the unit suites, which had been green the entire time. If a bug can only exist in the handoff, only a test that exercises that exact handoff will ever find it.
+
+---
+
+## Five Releases Later
+
+Since launch, RepoDeck has gone from a status dashboard to something closer to a daily driver: **1.3.0** added a per-repo settings sheet, per-repo auto-fetch intervals, sidebar groups, a ⌘K command palette, and opt-in auto-rebase on rejected pushes; **1.4.0** added one-level undo for pulls, stash support, GitHub PR/CI badges (via the `gh` CLI — the app's only non-git subprocess, and entirely optional), and a menu-bar mode; **1.5.0** brought a unified diff view; **1.6.0** an in-window command runner; and **1.7.0** finished the diff view with per-hunk staging.
+
+That last one — generating single-hunk patches and feeding them to `git apply --cached` — produced the sequel to the truncation-seam lesson above, three times over. All three bugs shared a signature: the unit tests were green because they asserted the *strings* my code produced, and my code and my tests agreed with each other about a format real git rejects.
+
+**A patch header git never writes.** My hunk patches put `/dev/null` on the `diff --git` line for new and deleted files, because that's where it appears on the `---`/`+++` lines. Real git never does that — both sides of `diff --git` always carry the real path. The consequence wasn't just a failed apply: unstaging a deletion "succeeded" while *also* staging a bogus empty file literally named `dev/null` into the index. String-asserting tests were green the whole time, because they asserted the exact wrong format the builder produced. The fix came with integration tests that run real `git apply` and then check `git ls-files --cached` for garbage.
+
+**The double reversal.** To unstage a hunk, I reasoned: build the patch with the hunk reversed, then apply it with `--reverse`. Both halves sound right; together they cancel out, and git rejects the result for every hunk kind. The correct pairing is to build the reversed patch and apply it *forward* — the reversed patch already describes index → HEAD. Only running the actual combination against an actual repository exposes this; no amount of inspecting the patch text does.
+
+**One `SIGPIPE` from a crash.** Feeding the patch to `git apply` over stdin added a pipe write to the subprocess layer — and writing into a pipe whose reader already exited doesn't return an error you can catch. It raises `SIGPIPE`, whose default disposition terminates the entire process before your `try?` ever runs. `git apply` happens to read all of stdin before validating, so the shipped path never triggered it, but any future child that exits without draining stdin would have taken the whole app down. One `fcntl(fd, F_SETNOSIGPIPE, 1)` turns that into a catchable `EPIPE`; the test writes 8 MB into `/usr/bin/true` and asserts the app is still alive afterward.
+
+Same moral as before, sharpened: a test that asserts what your code produces is a mirror, not a check. The only opinion that matters about a patch is `git apply`'s.
 
 ---
 
