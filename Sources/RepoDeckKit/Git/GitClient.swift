@@ -314,6 +314,27 @@ public struct GitClient: Sendable {
         )
     }
 
+    // MARK: - Hunk staging
+
+    /// Applies `patch` to the index via `git apply --cached [--reverse]
+    /// --whitespace=nowarn -` (patch on stdin). `cached` true stages (or,
+    /// with reverse, unstages) without touching the worktree. Throws
+    /// GitError on a failed apply (e.g. the hunk no longer applies because
+    /// the file changed). Does NOT pin `diffConfigPins` — this reads the
+    /// patch `PatchBuilder` generated, not git's own diff output, so those
+    /// path-parsing pins are irrelevant here.
+    public func applyPatch(_ patch: String, cached: Bool, reverse: Bool, in repo: URL) async throws {
+        var arguments = ["apply"]
+        if cached {
+            arguments.append("--cached")
+        }
+        if reverse {
+            arguments.append("--reverse")
+        }
+        arguments += ["--whitespace=nowarn", "-"]
+        try await runVoid(arguments, in: repo, stdin: Data(patch.utf8))
+    }
+
     // MARK: - Undo snapshots
     //
     // One-level undo for the two operations where RepoDeck itself rewrites
@@ -455,7 +476,8 @@ public struct GitClient: Sendable {
         maxOutputBytes: Int? = nil,
         priority: SubprocessPriority = .interactive,
         timeout: Duration? = nil,
-        toleratedExitCodes: Set<Int32> = []
+        toleratedExitCodes: Set<Int32> = [],
+        stdin: Data? = nil
     ) async throws -> ProcessResult {
         let fullArguments = ["-C", repo.path] + arguments
         let result = try await ProcessRunner.run(
@@ -464,7 +486,8 @@ public struct GitClient: Sendable {
             environment: environment,
             maxOutputBytes: maxOutputBytes,
             priority: priority,
-            timeout: timeout
+            timeout: timeout,
+            stdin: stdin
         )
         if result.timedOut {
             let seconds = timeout?.components.seconds ?? 0
@@ -502,9 +525,10 @@ public struct GitClient: Sendable {
         _ arguments: [String],
         in repo: URL,
         priority: SubprocessPriority = .interactive,
-        timeout: Duration? = nil
+        timeout: Duration? = nil,
+        stdin: Data? = nil
     ) async throws {
-        _ = try await run(arguments, in: repo, priority: priority, timeout: timeout)
+        _ = try await run(arguments, in: repo, priority: priority, timeout: timeout, stdin: stdin)
     }
 
     private func commandString(_ arguments: [String]) -> String {

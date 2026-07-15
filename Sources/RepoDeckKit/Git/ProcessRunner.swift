@@ -58,7 +58,8 @@ public enum ProcessRunner {
         environment: [String: String] = [:],
         maxOutputBytes: Int? = nil,
         priority: SubprocessPriority = .interactive,
-        timeout: Duration? = nil
+        timeout: Duration? = nil,
+        stdin: Data? = nil
     ) async throws -> ProcessResult {
         // (Req 3, 10) Acquire a global slot; release on every exit path. The
         // releaser must pass the same priority the acquirer used.
@@ -77,8 +78,18 @@ public enum ProcessRunner {
         for (key, value) in environment { env[key] = value }
         process.environment = env
 
-        // (Req 5) Never block on stdin.
-        process.standardInput = FileHandle.nullDevice
+        // (Req 5) Never block on stdin — unless the caller supplies a
+        // payload to write (e.g. a patch for `git apply -`), in which case
+        // an input pipe is attached instead of the null device.
+        let stdinPipe: Pipe?
+        if stdin != nil {
+            let pipe = Pipe()
+            process.standardInput = pipe
+            stdinPipe = pipe
+        } else {
+            process.standardInput = FileHandle.nullDevice
+            stdinPipe = nil
+        }
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -106,6 +117,24 @@ public enum ProcessRunner {
 
         // pid is Sendable, unlike Process — capture it for cancellation.
         let pid = process.processIdentifier
+
+        // (Req 5, cont.) Write any stdin payload from a DETACHED task,
+        // started before the stdout/stderr drain loops below begin. A
+        // synchronous write-then-drain would deadlock on a large payload:
+        // the child (e.g. `git apply` echoing a conflict to stderr, or
+        // `cat` in tests) can block writing to a full stdout/stderr pipe
+        // that nothing is draining yet, while we are still blocked writing
+        // to its full stdin pipe. Running the write concurrently with the
+        // drain avoids that — whichever side's buffer fills first, the
+        // other side is already being serviced. Closing the write end after
+        // the write signals EOF to the child; `try?` swallows a broken-pipe
+        // write (the child exited early without reading all of it).
+        if let stdin, let stdinPipe {
+            Task.detached {
+                try? stdinPipe.fileHandleForWriting.write(contentsOf: stdin)
+                try? stdinPipe.fileHandleForWriting.close()
+            }
+        }
 
         // Timeout watchdog: SIGTERM, then SIGKILL five seconds later if the
         // child still hasn't exited. A no-op when `timeout` is nil.

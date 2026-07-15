@@ -108,6 +108,50 @@ import Testing
         #expect(result.timedOut == false)
         #expect(result.exitCode == 0)
     }
+
+    // MARK: - stdin
+
+    @Test func stdinDefaultsToNullDeviceAndDoesNotBlock() async throws {
+        // Pins the existing behavior: with no `stdin` argument, a command
+        // that reads stdin sees immediate EOF rather than hanging.
+        let result = try await ProcessRunner.run(
+            "/bin/cat",
+            arguments: []
+        )
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.isEmpty)
+    }
+
+    @Test func catEchoesSmallStdinExactly() async throws {
+        let input = Data("hi\n".utf8)
+        let result = try await ProcessRunner.run(
+            "/bin/cat",
+            arguments: [],
+            stdin: input
+        )
+        #expect(result.exitCode == 0)
+        #expect(result.stdout == input)
+    }
+
+    @Test func catEchoesMultiMegabyteStdinWithoutDeadlock() async throws {
+        // Several MB is large enough to fill the stdin/stdout pipe buffers
+        // several times over; a naive "write all of stdin, then start
+        // reading stdout" implementation deadlocks here because `cat`
+        // blocks writing to a full stdout pipe that nobody is draining yet
+        // while we are still blocked writing to its full stdin pipe. This
+        // pins that the write happens concurrently with the drain.
+        var bytes = [UInt8](repeating: 0, count: 8_000_000)
+        for i in 0..<bytes.count { bytes[i] = UInt8(i % 256) }
+        let input = Data(bytes)
+
+        let result = try await ProcessRunner.run(
+            "/bin/cat",
+            arguments: [],
+            stdin: input
+        )
+        #expect(result.exitCode == 0)
+        #expect(result.stdout == input)
+    }
 }
 
 // MARK: - ConcurrencyLimiter (priority tiers)

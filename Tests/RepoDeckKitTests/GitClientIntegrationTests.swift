@@ -173,4 +173,118 @@ import Testing
             #expect(status.changes.count < 20)
         }
     }
+
+    // MARK: 9. Hunk-level staging (PatchBuilder + GitClient.applyPatch)
+
+    /// `git -C <repo> diff --cached -- <path>` via a direct call (not
+    /// `client.diff`, which pins config unrelated to what these tests
+    /// assert) — used to inspect exactly what landed in the index.
+    private func cachedDiffText(_ path: String, in repo: URL) async throws -> String {
+        let result = try await ProcessRunner.run(
+            arguments: ["-C", repo.path, "diff", "--cached", "--", path]
+        )
+        return String(decoding: result.stdout, as: UTF8.self)
+    }
+
+    @Test func stagingTheMiddleOfThreeHunksLeavesTheOtherTwoUnstagedThenReverseUnstagesIt() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("file.txt")
+            let originalLines = (1...30).map { "line\($0)" }
+            try (originalLines.joined(separator: "\n") + "\n")
+                .write(to: fileURL, atomically: true, encoding: .utf8)
+            try await client.stageAll(in: repo)
+            try await client.commit(message: "feat: initial", in: repo)
+
+            // Three well-separated single-line edits, each far enough apart
+            // (10 lines) that git's default 3-line context keeps them as
+            // three distinct hunks rather than merging any two.
+            var modifiedLines = originalLines
+            modifiedLines[4] = "line5-CHANGED"    // hunk 0
+            modifiedLines[14] = "line15-CHANGED"  // hunk 1 (the one under test)
+            modifiedLines[24] = "line25-CHANGED"  // hunk 2
+            try (modifiedLines.joined(separator: "\n") + "\n")
+                .write(to: fileURL, atomically: true, encoding: .utf8)
+
+            let fileDiff = try #require(try await client.diff(path: "file.txt", staged: false, in: repo))
+            #expect(fileDiff.hunks.count == 3)
+
+            let middleHunk = fileDiff.hunks[1]
+            let patch = PatchBuilder.patch(for: middleHunk, in: fileDiff, reverse: false)
+
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            // Both staged (the middle hunk) and unstaged (the other two)
+            // changes exist for the same file simultaneously.
+            let status = try await client.status(in: repo)
+            let staged = status.changes.filter { $0.area == .staged }
+            let unstaged = status.changes.filter { $0.area == .unstaged }
+            #expect(staged.map(\.path) == ["file.txt"])
+            #expect(unstaged.map(\.path) == ["file.txt"])
+
+            let staged1 = try await cachedDiffText("file.txt", in: repo)
+            #expect(staged1.contains("line15-CHANGED"))
+            #expect(!staged1.contains("line5-CHANGED"))
+            #expect(!staged1.contains("line25-CHANGED"))
+
+            // Reverse-apply the same hunk (unstage): the index goes back to
+            // clean for this file, the two other edits remain unstaged.
+            try await client.applyPatch(patch, cached: true, reverse: true, in: repo)
+
+            let staged2 = try await cachedDiffText("file.txt", in: repo)
+            #expect(staged2.isEmpty)
+
+            let finalStatus = try await client.status(in: repo)
+            #expect(finalStatus.changes.filter { $0.area == .staged }.isEmpty)
+            #expect(finalStatus.changes.filter { $0.area == .unstaged }.map(\.path) == ["file.txt"])
+        }
+    }
+
+    @Test func crlfHunkAppliesCleanly() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("crlf.txt")
+            let originalLines = (1...10).map { "line\($0)" }
+            try Data((originalLines.joined(separator: "\r\n") + "\r\n").utf8).write(to: fileURL)
+            try await client.stageAll(in: repo)
+            try await client.commit(message: "feat: crlf initial", in: repo)
+
+            var modifiedLines = originalLines
+            modifiedLines[4] = "line5-CHANGED"
+            try Data((modifiedLines.joined(separator: "\r\n") + "\r\n").utf8).write(to: fileURL)
+
+            let fileDiff = try #require(try await client.diff(path: "crlf.txt", staged: false, in: repo))
+            #expect(fileDiff.hunks.count == 1)
+            let hunk = fileDiff.hunks[0]
+            // The CRLF fidelity this exercises: DiffLine.text keeps the \r.
+            #expect(hunk.lines.contains { $0.text.hasSuffix("\r") })
+
+            let patch = PatchBuilder.patch(for: hunk, in: fileDiff, reverse: false)
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            let staged = try await cachedDiffText("crlf.txt", in: repo)
+            #expect(staged.contains("line5-CHANGED"))
+        }
+    }
+
+    @Test func noNewlineAtEndOfFileHunkAppliesCleanly() async throws {
+        try await withTempRepo { repo, client in
+            let fileURL = repo.appendingPathComponent("nonl.txt")
+            // No trailing newline on the last line.
+            try Data("line1\nline2\nline3".utf8).write(to: fileURL)
+            try await client.stageAll(in: repo)
+            try await client.commit(message: "feat: no-newline initial", in: repo)
+
+            try Data("line1\nline2\nline3-CHANGED".utf8).write(to: fileURL)
+
+            let fileDiff = try #require(try await client.diff(path: "nonl.txt", staged: false, in: repo))
+            #expect(fileDiff.hunks.count == 1)
+            let hunk = fileDiff.hunks[0]
+            #expect(hunk.lines.contains { $0.noNewlineAtEOF })
+
+            let patch = PatchBuilder.patch(for: hunk, in: fileDiff, reverse: false)
+            try await client.applyPatch(patch, cached: true, reverse: false, in: repo)
+
+            let staged = try await cachedDiffText("nonl.txt", in: repo)
+            #expect(staged.contains("line3-CHANGED"))
+        }
+    }
 }
