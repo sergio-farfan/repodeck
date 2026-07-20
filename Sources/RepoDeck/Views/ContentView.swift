@@ -57,6 +57,24 @@ struct ContentView: View {
                             }
                         }
                     }
+
+                    if !model.hiddenRepoIDs.isEmpty {
+                        Divider()
+
+                        Menu("Hidden Repositories") {
+                            ForEach(model.hiddenRepoIDs, id: \.self) { id in
+                                Button((id as NSString).lastPathComponent) {
+                                    model.unhideRepo(id)
+                                }
+                            }
+
+                            Divider()
+
+                            Button("Show All") {
+                                model.unhideAllRepos()
+                            }
+                        }
+                    }
                 }
 
                 Button {

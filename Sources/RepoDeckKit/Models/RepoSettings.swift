@@ -41,17 +41,22 @@ public struct RepoSettings: Codable, Sendable, Equatable {
     public var autoRebaseOnRejectedPush: Bool
     public var autoFetchInterval: AutoFetchInterval
     public var group: String?
+    /// Whether the repo is hidden from the dashboard. A hidden repo is
+    /// filtered out on every rescan (never deleted from disk) until unhidden.
+    public var isHidden: Bool
 
     public init(
         isPinned: Bool = false,
         autoRebaseOnRejectedPush: Bool = false,
         autoFetchInterval: AutoFetchInterval = .off,
-        group: String? = nil
+        group: String? = nil,
+        isHidden: Bool = false
     ) {
         self.isPinned = isPinned
         self.autoRebaseOnRejectedPush = autoRebaseOnRejectedPush
         self.autoFetchInterval = autoFetchInterval
         self.group = group
+        self.isHidden = isHidden
     }
 
     /// True when every field equals its default — such entries are pruned
@@ -61,7 +66,7 @@ public struct RepoSettings: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case isPinned, autoRebaseOnRejectedPush, autoFetchInterval, group
+        case isPinned, autoRebaseOnRejectedPush, autoFetchInterval, group, isHidden
     }
 
     public init(from decoder: Decoder) throws {
@@ -71,6 +76,7 @@ public struct RepoSettings: Codable, Sendable, Equatable {
         let rawInterval = try container.decodeIfPresent(String.self, forKey: .autoFetchInterval)
         autoFetchInterval = rawInterval.flatMap(AutoFetchInterval.init(rawValue:)) ?? .off
         group = try container.decodeIfPresent(String.self, forKey: .group)
+        isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -79,6 +85,7 @@ public struct RepoSettings: Codable, Sendable, Equatable {
         try container.encode(autoRebaseOnRejectedPush, forKey: .autoRebaseOnRejectedPush)
         try container.encode(autoFetchInterval, forKey: .autoFetchInterval)
         try container.encodeIfPresent(group, forKey: .group)
+        try container.encode(isHidden, forKey: .isHidden)
     }
 }
 

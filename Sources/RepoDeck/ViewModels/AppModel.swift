@@ -48,7 +48,7 @@ final class AppModel {
     /// Whether the ⌘K command palette overlay is presented.
     var isPaletteVisible = false
     /// Consolidated per-repo settings (pin, auto-rebase, auto-fetch
-    /// interval, group), keyed by repo id (i.e. path). Persisted as one
+    /// interval, group, hidden), keyed by repo id (i.e. path). Persisted as one
     /// JSON blob under `repoSettingsKey`. `private(set)`: `updateSettings`
     /// is the sole write path, so every write also re-persists and (for
     /// `autoRebaseOnRejectedPush`) re-mirrors onto the live `RepoViewModel`.
@@ -262,12 +262,48 @@ final class AppModel {
         updateSettings(for: id) { $0.group = name }
     }
 
-    /// Drops a repo from the in-memory list only (e.g. a missing repo the
-    /// user dismissed). It returns on the next rescan if still on disk.
+    /// Drops a repo from the in-memory list only — it returns on the next
+    /// rescan if still on disk. `hideRepo` is the persistent wrapper.
     func removeRepo(_ id: String) {
         repos.removeAll { $0.id == id }
         if selectedRepoID == id {
             selectedRepoID = nil
+        }
+    }
+
+    /// Hides a repo: persists the `isHidden` flag and drops it from the
+    /// in-memory list (clearing the selection if it was selected). Unlike
+    /// `removeRepo`, the repo does not return on the next rescan — restore
+    /// it via the Folders menu's Hidden Repositories submenu. Never touches
+    /// the filesystem.
+    func hideRepo(_ id: String) {
+        updateSettings(for: id) { $0.isHidden = true }
+        removeRepo(id)
+    }
+
+    /// Unhides a repo, persists, and kicks off a rescan so it reappears.
+    func unhideRepo(_ id: String) {
+        updateSettings(for: id) { $0.isHidden = false }
+        Task { await rescan() }
+    }
+
+    /// Unhides every hidden repo with a single follow-up rescan (calling
+    /// `unhideRepo` in a loop would queue one redundant rescan per repo).
+    func unhideAllRepos() {
+        for id in hiddenRepoIDs {
+            updateSettings(for: id) { $0.isHidden = false }
+        }
+        Task { await rescan() }
+    }
+
+    /// The ids of every hidden repo, sorted case-insensitively by display
+    /// name (the id's last path component). Backs the Folders menu's
+    /// Hidden Repositories submenu.
+    var hiddenRepoIDs: [String] {
+        repoSettingsByID.filter { $0.value.isHidden }.keys.sorted {
+            let a = ($0 as NSString).lastPathComponent
+            let b = ($1 as NSString).lastPathComponent
+            return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
         }
     }
 
@@ -392,6 +428,8 @@ final class AppModel {
         for repo in discovered where seenIDs.insert(repo.id).inserted {
             deduped.append(repo)
         }
+        // Hidden repos stay on disk but never reach the dashboard.
+        deduped.removeAll { settings(for: $0.id).isHidden }
         deduped.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         // Reuse existing view models by id so future per-repo state survives a rescan.

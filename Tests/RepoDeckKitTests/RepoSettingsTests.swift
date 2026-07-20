@@ -70,9 +70,30 @@ func isDefaultFalseForGroup() {
     #expect(RepoSettings(group: "Work").isDefault == false)
 }
 
-@Test("6e. isDefault is true for the default instance")
+@Test("6e. isDefault is false when isHidden differs from default")
+func isDefaultFalseForIsHidden() {
+    #expect(RepoSettings(isHidden: true).isDefault == false)
+}
+
+@Test("6f. isDefault is true for the default instance")
 func isDefaultTrueForDefaultInstance() {
     #expect(RepoSettings().isDefault)
+}
+
+@Test("10. Round-trip: isHidden true survives encode and decode")
+func roundTripIsHidden() throws {
+    let settings = RepoSettings(isHidden: true)
+    let data = try jsonEncoder.encode(settings)
+    let decoded = try jsonDecoder.decode(RepoSettings.self, from: data)
+    #expect(decoded == settings)
+    #expect(decoded.isHidden == true)
+}
+
+@Test("11. Legacy decode: JSON without isHidden yields isHidden == false")
+func legacyDecodeWithoutIsHidden() throws {
+    let data = Data(#"{"isPinned": true}"#.utf8)
+    let decoded = try jsonDecoder.decode(RepoSettings.self, from: data)
+    #expect(decoded.isHidden == false)
 }
 
 @Test("7. seconds maps each interval to its expected TimeInterval")

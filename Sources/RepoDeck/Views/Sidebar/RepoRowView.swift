@@ -162,11 +162,10 @@ struct RepoRowView: View {
             pasteboard.setString(vm.repo.path.path, forType: .string)
         }
 
-        if vm.isMissing {
-            Divider()
-            Button("Remove") {
-                model.removeRepo(vm.id)
-            }
+        Divider()
+
+        Button("Remove from List") {
+            model.hideRepo(vm.id)
         }
     }
 }
