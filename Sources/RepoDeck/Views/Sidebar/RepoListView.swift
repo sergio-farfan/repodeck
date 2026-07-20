@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RepoListView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         @Bindable var model = model
@@ -33,5 +34,22 @@ struct RepoListView: View {
         }
         .listStyle(.sidebar)
         .searchable(text: $model.filterText, placement: .sidebar, prompt: "Filter repositories")
+        .safeAreaInset(edge: .top, spacing: 0) { SidebarHeader() }
+        .scrollContentBackground(.hidden)
+        .background(Theme.sidebarBackground(for: colorScheme).ignoresSafeArea())
+    }
+}
+
+private struct SidebarHeader: View {
+    @Environment(\.theme) private var theme
+    var body: some View {
+        HStack {
+            Text("RepoDeck")
+                .font(theme.title)
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
     }
 }

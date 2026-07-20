@@ -76,3 +76,13 @@ extension EnvironmentValues {
         set { self[ThemeKey.self] = newValue }
     }
 }
+
+extension Theme {
+    /// Flat sidebar pane color (ChatGPT-desktop look). Static + hardcoded on
+    /// purpose — not a ThemeSettings knob; promote later if ever needed.
+    static func sidebarBackground(for scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color(red: 0x20 / 255.0, green: 0x21 / 255.0, blue: 0x23 / 255.0)  // #202123
+            : Color(red: 0xF7 / 255.0, green: 0xF7 / 255.0, blue: 0xF8 / 255.0)  // #F7F7F8
+    }
+}
