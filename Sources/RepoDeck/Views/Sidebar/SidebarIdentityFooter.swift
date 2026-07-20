@@ -8,6 +8,7 @@ import SwiftUI
 struct SidebarIdentityFooter: View {
     @Environment(AppModel.self) private var model
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let vm = model.selectedRepo
@@ -18,6 +19,9 @@ struct SidebarIdentityFooter: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             }
+            // Opaque: list rows scroll beneath this inset and would show
+            // through a transparent footer.
+            .background(Theme.sidebarBackground(for: colorScheme))
             .task(id: model.selectedRepoID) {
                 await model.selectedRepo?.refreshIdentity()
             }
