@@ -7,7 +7,19 @@ struct RepoListView: View {
     var body: some View {
         @Bindable var model = model
 
-        List(selection: $model.selectedRepoID) {
+        VStack(spacing: 0) {
+            SidebarHeader()
+            SidebarFilterField(text: $model.filterText)
+            repoList
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { SidebarIdentityFooter() }
+        .background(Theme.sidebarBackground(for: colorScheme).ignoresSafeArea())
+    }
+
+    private var repoList: some View {
+        @Bindable var model = model
+
+        return List(selection: $model.selectedRepoID) {
             if !model.filteredPinned.isEmpty {
                 Section("Pinned") {
                     ForEach(model.filteredPinned) { vm in
@@ -33,11 +45,7 @@ struct RepoListView: View {
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $model.filterText, placement: .sidebar, prompt: "Filter repositories")
-        .safeAreaInset(edge: .top, spacing: 0) { SidebarHeader() }
-        .safeAreaInset(edge: .bottom, spacing: 0) { SidebarIdentityFooter() }
         .scrollContentBackground(.hidden)
-        .background(Theme.sidebarBackground(for: colorScheme).ignoresSafeArea())
     }
 }
 
@@ -46,11 +54,40 @@ private struct SidebarHeader: View {
     var body: some View {
         HStack {
             Text("RepoDeck")
-                .font(theme.title)
+                .font(theme.ui(18, weight: .bold))
             Spacer()
         }
         .padding(.horizontal, 16)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
+    }
+}
+
+/// The sidebar's repo filter, replacing `.searchable` so it renders below
+/// the app title (a top `safeAreaInset` cannot be ordered above the
+/// `.sidebar`-placement search field). Same magnifying-glass + plain
+/// TextField shape as `HistoryListView.searchBar`, in a rounded fill.
+private struct SidebarFilterField: View {
+    @Binding var text: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+                .font(theme.callout)
+
+            TextField("Filter repositories", text: $text)
+                .textFieldStyle(.plain)
+                .font(theme.callout)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.12))
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
     }
 }
