@@ -78,6 +78,29 @@ public struct GhClient: Sendable {
         }
     }
 
+    /// Active account login via `gh auth status` (local — works offline).
+    /// nil when not authenticated or the output format is unrecognized.
+    /// Same never-throw posture as `isAuthenticated()`: a missing login is
+    /// "show nothing", never an error. stdout and stderr are concatenated
+    /// before parsing because older gh versions wrote the status report to
+    /// stderr; newer ones write it to stdout.
+    public func activeAccountLogin() async -> String? {
+        do {
+            let result = try await ProcessRunner.run(
+                ghPath,
+                arguments: ["auth", "status"],
+                environment: Self.environment,
+                priority: .background,
+                timeout: Self.callTimeout
+            )
+            guard !result.timedOut, result.exitCode == 0 else { return nil }
+            let output = String(decoding: result.stdout, as: UTF8.self) + "\n" + result.stderr
+            return GhAuthStatusParser.activeLogin(from: output)
+        } catch {
+            return nil
+        }
+    }
+
     /// `gh pr list --head <branch> --state open --limit 1 --json number,
     /// title,isDraft,url,reviewDecision,statusCheckRollup`, run in `repo`
     /// (gh has no `-C`, so this is `workingDirectory`, not an argument).

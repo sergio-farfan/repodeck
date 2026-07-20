@@ -335,6 +335,29 @@ public struct GitClient: Sendable {
         try await runVoid(arguments, in: repo, stdin: Data(patch.utf8))
     }
 
+    // MARK: - Identity
+
+    /// Effective commit identity for `repo`: `git config user.name` +
+    /// `git config user.email`, each resolved the way git itself would
+    /// (local config overriding global). `git config <key>` exits 1 with
+    /// empty stdout when the key is unset anywhere — that is "not
+    /// configured", not a failure, so exit 1 is tolerated (same mechanism
+    /// as `diffUntracked`) and a blank trimmed value becomes a nil field.
+    public func configuredIdentity(in repo: URL) async throws -> GitIdentity {
+        let name = try await configValue("user.name", in: repo)
+        let email = try await configValue("user.email", in: repo)
+        return GitIdentity(name: name, email: email)
+    }
+
+    /// `git config <key>` -> trimmed value, nil when unset (exit 1) or set
+    /// to an empty/whitespace-only string.
+    private func configValue(_ key: String, in repo: URL) async throws -> String? {
+        let result = try await run(["config", key], in: repo, toleratedExitCodes: [1])
+        let value = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
     // MARK: - Undo snapshots
     //
     // One-level undo for the two operations where RepoDeck itself rewrites
