@@ -5,6 +5,16 @@ All notable changes to RepoDeck will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-07-20
+
+### Added
+
+- **Identity footer** — the bottom of the sidebar now shows who you are committing as: the selected repo's effective git identity (`git config user.name` / `user.email`, with an initials avatar) plus the active GitHub CLI account when `gh` is authenticated. The git identity re-reads on every selection change, so per-repo identities (work vs. personal) are always accurate; the GitHub line works offline because it reads `gh auth status` rather than the network. Repos with no identity configured say so instead of showing nothing.
+
+### Changed
+
+- **Sidebar restyle** — the sidebar is now a flat neutral grey pane (light and dark variants) instead of the translucent system material, with the app name in bold at the top above the repository filter. The filter moved from the system search field to a rounded in-pane field so it sits below the title; it filters exactly as before.
+
 ## [1.7.0] - 2026-07-15
 
 ### Added

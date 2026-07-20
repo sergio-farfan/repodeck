@@ -2,31 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleIdentifier</key>
-	<string>com.sergiofarfan.repodeck</string>
-	<key>CFBundleName</key>
-	<string>RepoDeck</string>
 	<key>CFBundleDisplayName</key>
 	<string>RepoDeck</string>
 	<key>CFBundleExecutable</key>
 	<string>RepoDeck</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.7.0</string>
-	<key>CFBundleVersion</key>
-	<string>9</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.sergiofarfan.repodeck</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>15.0</string>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
+	<key>CFBundleName</key>
+	<string>RepoDeck</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.8.0</string>
+	<key>CFBundleVersion</key>
+	<string>10</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.developer-tools</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 </dict>
 </plist>
