@@ -45,6 +45,9 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Populated by `refreshStashes()`; rendered by `StashSection` at the
     /// bottom of `ChangesListView`.
     var stashes: [StashEntry] = []
+    /// Effective git identity shown by the sidebar footer. Passive like
+    /// `refreshStashes`: stale beats blank.
+    var gitIdentity: GitIdentity?
     /// Free-text history search bound to `HistoryListView`'s search field.
     /// Trimmed empty (the default) means "no filter" — `refreshLog()` falls
     /// back to the full `client.log(in:)`.
@@ -320,6 +323,14 @@ final class RepoViewModel: @MainActor Identifiable {
     /// `refreshLog()`, and at the tail of every stash mutation below.
     func refreshStashes() async {
         stashes = (try? await client.stashList(in: repo.path)) ?? stashes
+    }
+
+    /// Refreshes `gitIdentity` from the repo's effective `git config`.
+    /// Passive like `refreshStashes`: no `isBusy`, no `actionError` banner —
+    /// a stale identity beats a blank one, so a failure leaves it untouched.
+    /// Called from `SidebarIdentityFooter.task(id:)` on selection change.
+    func refreshIdentity() async {
+        gitIdentity = (try? await client.configuredIdentity(in: repo.path)) ?? gitIdentity
     }
 
     /// Loads the diff for `target` into `diffFiles`, driving `DiffView`

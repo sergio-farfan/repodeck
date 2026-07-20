@@ -85,6 +85,11 @@ final class AppModel {
     /// gates on this rather than re-checking auth per call, per the brief's
     /// "runs once per launch" contract for `isAuthenticated()`.
     private(set) var isGhAvailable = false
+    /// The active `gh` account's login (e.g. "sergiofarfan"), resolved by
+    /// the same one-shot auth check in `init` that sets `isGhAvailable`;
+    /// nil when `gh` is missing, unauthenticated, or the login can't be
+    /// parsed. Rendered by `SidebarIdentityFooter`.
+    private(set) var ghAccountLogin: String?
 
     private let watcher = RepoWatcher()
     private var watcherTask: Task<Void, Never>?
@@ -163,6 +168,9 @@ final class AppModel {
         Task { [weak self] in
             let authenticated = await gh?.isAuthenticated() ?? false
             self?.isGhAvailable = authenticated
+            if authenticated {
+                self?.ghAccountLogin = await gh?.activeAccountLogin()
+            }
         }
     }
 
@@ -200,6 +208,15 @@ final class AppModel {
     /// (i.e. it has never had a non-default setting).
     func settings(for id: String) -> RepoSettings {
         repoSettingsByID[id] ?? RepoSettings()
+    }
+
+    /// The view model `selectedRepoID` points at, or nil. Defensive:
+    /// `selectedRepoID` can point at a repo that just disappeared (rescan
+    /// pruned it, or `removeRepo` dropped it), so `first(where:)` returning
+    /// nil is the "no selection" state, never a crash.
+    var selectedRepo: RepoViewModel? {
+        guard let selectedRepoID else { return nil }
+        return repos.first { $0.id == selectedRepoID }
     }
 
     /// Sorted unique non-nil group names currently assigned to any repo.

@@ -35,6 +35,7 @@ struct RepoListView: View {
         .listStyle(.sidebar)
         .searchable(text: $model.filterText, placement: .sidebar, prompt: "Filter repositories")
         .safeAreaInset(edge: .top, spacing: 0) { SidebarHeader() }
+        .safeAreaInset(edge: .bottom, spacing: 0) { SidebarIdentityFooter() }
         .scrollContentBackground(.hidden)
         .background(Theme.sidebarBackground(for: colorScheme).ignoresSafeArea())
     }

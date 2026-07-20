@@ -142,12 +142,10 @@ struct ContentView: View {
                 systemImage: "folder.badge.questionmark",
                 description: Text("None of the tracked folders contain a git repository. Add a folder that does, or clone one into an existing tracked folder.")
             )
-        } else if let selectedRepoID = model.selectedRepoID,
-            // Defensive: `selectedRepoID` can point at a repo that just
-            // disappeared (rescan pruned it, or `removeRepo` dropped it).
-            // `first(where:)` returns nil rather than crashing, and we fall
-            // through to the "no selection" state below.
-            let selected = model.repos.first(where: { $0.id == selectedRepoID }) {
+        } else if let selected = model.selectedRepo {
+            // `selectedRepo` is nil both for no selection and for a repo
+            // that just disappeared (rescan pruned it, or `removeRepo`
+            // dropped it) — either way we fall through to the state below.
             RepoDetailView(vm: selected)
         } else {
             ContentUnavailableView(
