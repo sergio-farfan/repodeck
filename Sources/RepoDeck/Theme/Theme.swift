@@ -83,6 +83,6 @@ extension Theme {
     static func sidebarBackground(for scheme: ColorScheme) -> Color {
         scheme == .dark
             ? Color(red: 0x20 / 255.0, green: 0x21 / 255.0, blue: 0x23 / 255.0)  // #202123
-            : Color(red: 0xF7 / 255.0, green: 0xF7 / 255.0, blue: 0xF8 / 255.0)  // #F7F7F8
+            : Color(red: 0xEC / 255.0, green: 0xEC / 255.0, blue: 0xEE / 255.0)  // #ECECEE
     }
 }
