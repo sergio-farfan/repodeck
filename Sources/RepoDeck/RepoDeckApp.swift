@@ -73,9 +73,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
-        if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "icns"),
+        if let url = dockIconURL(),
            let image = NSImage(contentsOf: url) {
             NSApp.applicationIconImage = image
         }
+    }
+
+    private func dockIconURL() -> URL? {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns") {
+            return url
+        }
+        let sibling = Bundle.main.bundleURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("RepoDeck_RepoDeck.bundle")
+        return Bundle(url: sibling)?.url(forResource: "AppIcon", withExtension: "icns")
     }
 }
