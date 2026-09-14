@@ -2,7 +2,7 @@ I have somewhere around thirty git repositories checked out on my Mac at any giv
 
 So I built **RepoDeck** — a native macOS dashboard that tracks a set of folders, recursively finds every git repository underneath them, and shows you at a glance which ones need attention. It now handles branches, worktrees, conflicts, and code reviews too, without losing that overview.
 
-> *Updated September 2026:* **[1.10.1 is out as a stable release](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1)**. The feature list and implementation notes below are current. [From Dashboard to Git Client](#from-dashboard-to-git-client) covers the bigger additions — a commit graph, branch and worktree management, a text conflict resolver, GitHub/GitLab reviews, and the safety fixes behind them.
+> *Updated September 2026:* **[1.11.0 is out as a stable release](https://github.com/sergio-farfan/repodeck/releases/tag/v1.11.0)**. This update adds readable messages with recovery actions, searchable offline Help, commit-author setup inside the app, and a fix for the diff-window layout crash reported on macOS 27. [Making Errors Useful](#making-errors-useful) covers what changed; [From Dashboard to Git Client](#from-dashboard-to-git-client) explains the graph, branches, worktrees, conflicts, and reviews behind the current app.
 >
 > Want to try it right now? **[Download RepoDeck.dmg →](https://github.com/sergio-farfan/repodeck/releases/latest/download/RepoDeck.dmg)** — open it and drag RepoDeck to Applications.
 
@@ -14,7 +14,7 @@ So I built **RepoDeck** — a native macOS dashboard that tracks a set of folder
 
 - **Multi-repo dashboard** — track folders, discover repositories and their registered worktrees, and filter for changes, conflicts, ahead/behind state, or errors
 - **Live status via FSEvents** — filesystem-driven refreshes, including the separate Git metadata used by linked worktrees
-- **Stage, commit, and sync** — pull, push, and fetch per repo, plus **Fetch All** / **Pull All** with success, failure, and skipped counts
+- **Stage, commit, and sync** — pull, push, and fetch per repo, plus **Fetch All** / **Pull All** with success, failure, and skipped counts plus per-repository results
 - **Diff view with hunk staging** — unified file and commit diffs; stage or unstage eligible text hunks, with whole-file alternatives when exact content or metadata cannot be preserved
 - **Commit graph and history search** — parent connections, branch/tag labels, current/all-branch views, 100-commit pages, and search by message, author, file path, or content
 - **Branches and worktrees** — create, switch, rename, safely delete merged branches, set tracking, and create, open, or safely remove worktrees
@@ -27,6 +27,9 @@ So I built **RepoDeck** — a native macOS dashboard that tracks a set of folder
 - **Stash support**, optional **GitHub PR/CI badges**, and an optional **menu-bar mode**
 - **In-window command runner** — shell commands in the repo's directory, bounded live output, and cancellation that cleans up the owned process group; open a terminal for interactive programs
 - **Developer tool preferences** — configurable Git/hosting executables, preferred editor and terminal, and per-repository overrides
+- **Actionable messages** — readable notices inside the workspace, recovery actions where available, and selectable, copyable diagnostic details
+- **Offline Help** — 18 searchable topics covering setup, everyday workflows, troubleshooting, and recovery
+- **Commit-author setup** — see the effective author Git will use, configure repository-specific or global defaults, and distinguish commit attribution from SSH and hosting authentication
 - **Themes** — System/Light/Dark, custom accent color, fonts, and font size (⌘,)
 
 ---
@@ -99,7 +102,7 @@ Unmerged conflicts (`u` records, left behind by a failed merge or rebase) carry 
 
 ## ProcessRunner: One Subprocess Primitive for Everything
 
-Git and hosting commands share one subprocess runner, with async entry points, bounded output, cancellation, and a global concurrency limit. The command pane uses the same machinery. Version 1.10.1 keeps the original reason for centralizing it, but the implementation now owns a POSIX process group for each job.
+Git and hosting commands share one subprocess runner, with async entry points, bounded output, cancellation, and a global concurrency limit. The command pane uses the same machinery. The current implementation keeps the original reason for centralizing it, but the implementation now owns a POSIX process group for each job.
 
 ### The pipe-drain deadlock
 
@@ -244,7 +247,7 @@ The lesson stuck: when two components are each individually correct and each ind
 
 ## From Dashboard to Git Client
 
-The early releases filled in the everyday gaps: per-repo auto-fetch, groups, a ⌘K palette, opt-in auto-rebase, undo, stashes, PR/CI badges, a menu-bar mode, diffs, and hunk staging. Later came the sidebar identity footer and hiding repositories without deleting their folders. **1.10.1** takes the next step: I can move from noticing a repository needs attention to working through its branch, conflict, or review in the same app.
+The early releases filled in the everyday gaps: per-repo auto-fetch, groups, a ⌘K palette, opt-in auto-rebase, undo, stashes, PR/CI badges, a menu-bar mode, diffs, and hunk staging. Later came the sidebar identity footer and hiding repositories without deleting their folders. **1.10.1** took the next step: I can move from noticing a repository needs attention to working through its branch, conflict, or review in the same app.
 
 ### History, branches, and worktrees
 
@@ -266,17 +269,51 @@ A hunk-staging button is only useful if it stages exactly the bytes I selected. 
 
 Stash selections follow object IDs instead of trusting an old row number. Undo verifies the original worktree, branch, and expected commit. Mutations that share Git metadata are coordinated, and their previews are checked again after waiting for capacity. External Git programs don't participate in that coordination, so I don't describe this as an atomic transaction against every other process on the machine.
 
-The stable release also includes safer icon-resource lookup: missing resources no longer invoke the fatal SwiftPM accessor during launch. Seven fixture scenarios cover packaged apps, executable-adjacent bundles, and absent resources. For the exact released source, [native Apple silicon and Intel CI](https://github.com/sergio-farfan/repodeck/actions/runs/34799832600) each passed **338 tests across 25 suites**, alongside build and packaging checks.
+The 1.10.1 release also added safer icon-resource lookup: missing resources no longer invoke the fatal SwiftPM accessor during launch. Seven fixture scenarios cover packaged apps, executable-adjacent bundles, and absent resources. For the current **1.11.0** release source, [native Apple silicon and Intel CI](https://github.com/sergio-farfan/repodeck/actions/runs/34817711162) each passed **389 tests across 28 suites**, alongside build and packaging checks. Both published DMG names were downloaded and checked against the release SHA-256; the app inside was verified for its version, universal architecture, and ad-hoc signature.
 
-That still leaves work to validate on real setups: clean-machine installation and first launch, the full VoiceOver/appearance matrix, and live GitHub/GitLab writes across permissions and hosting configurations. Those limits are recorded in the [release notes](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1). Interactive rebase editing, inline threaded-review editing, issue tracking, and Windows/Linux ports remain future work.
+That still leaves work to validate on real setups: clean-machine installation and first launch, the full VoiceOver/appearance matrix, and live GitHub/GitLab writes across permissions and hosting configurations. Those limits are recorded in the [release notes](https://github.com/sergio-farfan/repodeck/releases/tag/v1.11.0). Interactive rebase editing, inline threaded-review editing, issue tracking, and Windows/Linux ports remain future work.
 
 The full per-release detail is in the [changelog](https://github.com/sergio-farfan/repodeck/blob/main/CHANGELOG.md), and the README carries a [release history and roadmap](https://github.com/sergio-farfan/repodeck#releases--roadmap).
 
 ---
 
+## Making Errors Useful
+
+One of the most useful bug reports was also one of the simplest: a message was drawn across the top of the window, over the sidebar title, and I couldn't read it. Worse, a successful **Fetch All** was wearing a warning icon. Even a correct Git operation feels broken when the app explains it badly.
+
+**1.11.0** puts notices inside the workspace with bounded, wrapping text. Success, warning, and failure have distinct presentations. Longer diagnostics live in a scrollable details view where I can select and copy them, instead of stretching a banner across the window. When the failure is recognized, the app offers an appropriate next step — opening the relevant workspace, settings, terminal, or Help topic. It doesn't silently run a destructive command to make the message disappear.
+
+Bulk operations also keep the result for each repository. If **Pull All** reports a failure or a busy repository was skipped, I can inspect which repository it was and what happened. A single total isn't enough when I'm managing thirty checkouts.
+
+### Help that works offline
+
+Choosing **Help → RepoDeck Help** now opens an actual guide instead of macOS's “Help isn't available” dialog. There are **18 searchable topics**, with related links and back/forward navigation, covering setup, changes and commits, branches and worktrees, conflicts, hosting reviews, tools, and troubleshooting. Search with **⌘F** inside the Help window.
+
+The guide explains recovery limits too. Undo has a specific branch and worktree context; it isn't a backup of every local file. Partial staging has whole-file alternatives when exact content can't be preserved. I want those limits available at the moment I need them, including when the network is down.
+
+### Commit authors are different from login credentials
+
+Another confusing message was “No git identity configured.” SSH was working, GitHub showed the right account, and commits could still have an author. The problem was that the footer was looking at configuration defaults rather than asking Git for the effective commit author.
+
+The footer now uses the same Git author lookup an ordinary new commit relies on:
+
+```bash
+git var GIT_AUTHOR_IDENT
+```
+
+That includes Git's author overrides and the environment inherited by the app. SSH keys prove I can connect to a remote; a GitHub or GitLab login grants hosting access. Neither automatically supplies the name and email recorded in a commit.
+
+Click **Configure Author…** or **Edit Author…** in the sidebar to edit the name and email for **this repository** or the **global default**, then explicitly save. Repository-specific settings are useful for keeping work and personal addresses separate. The form shows the effective author separately from those editable defaults and explains when an override takes precedence. Failed saves preserve the draft. Existing commits keep their original authors, and the app doesn't replace SSH keys or hosting credentials.
+
+### A steadier diff workspace
+
+This release also fixes a reported macOS 27 crash involving the native diff inspector's layout updates. The diff now lives in a split workspace that preserves the current view state as it opens and closes. Repeated open/close cycles were checked locally; the broader keyboard, VoiceOver, and appearance checks remain listed separately in the release verification notes.
+
+---
+
 ## Build & Install
 
-**Easiest:** **[download RepoDeck.dmg directly](https://github.com/sergio-farfan/repodeck/releases/latest/download/RepoDeck.dmg)** (or browse the [latest release](https://github.com/sergio-farfan/repodeck/releases/latest)), open it, and drag **RepoDeck** onto **Applications**. The installer is universal for **Apple silicon and Intel**, and requires **macOS 15 or later**.
+**Easiest:** **[download RepoDeck.dmg directly](https://github.com/sergio-farfan/repodeck/releases/latest/download/RepoDeck.dmg)** (or browse the [latest release](https://github.com/sergio-farfan/repodeck/releases/latest)), open it, and drag **RepoDeck** onto **Applications**. When updating, quit the running app before replacing it in Applications. The installer is universal for **Apple silicon and Intel**, and requires **macOS 15 or later**.
 
 RepoDeck is **ad-hoc signed and not notarized**. After verifying the download's SHA-256 against the release checksum and attempting to open it, you may need **System Settings → Privacy & Security → Open Anyway**. See [Apple's first-launch instructions](https://support.apple.com/en-lamr/102445); managed Macs may have additional restrictions. This is the standard distribution — Developer ID signing and notarization are optional future improvements.
 
