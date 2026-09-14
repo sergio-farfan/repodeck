@@ -11,19 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Restore the established ad-hoc signed, unnotarized GitHub distribution policy. Developer ID signing and notarization are optional; release checks cover the chosen distribution and its first-launch instructions.
 
-## [1.10.1] - Beta draft (2026-09-13)
+## [1.10.1] - 2026-09-13
 
-Follow-up to the combined Git-client beta in 1.10.0; public distribution remains pending the manual release gates.
+Stable release, including all additions and fixes recorded in the unpublished 1.10.0 section below. Version 1.10.0 remains a superseded draft; these features first ship publicly in 1.10.1.
+
+### Added
+
+- Commit graph, branch/tracking/worktree management, text conflict resolution, and GitHub/GitLab review workspaces.
+- Configurable Git/hosting executables, editor/terminal preferences, repository overrides, attention filters, and keyboard-accessible controls.
 
 ### Fixed
 
+- The repository safety, refresh, subprocess, and hosting fixes detailed under 1.10.0.
 - Subprocess timeout tests distinguish process execution from queue admission and report early launch/exit failures directly. Readiness-dependent cleanup tests synchronize with the actual child before cancellation.
 - Dock icon loading uses optional app/SwiftPM resource lookup instead of a fatal generated accessor, incorporating the contributor fix in [#1](https://github.com/sergio-farfan/repodeck/pull/1).
 - The review list has a bounded width to reserve more room for review details and actions.
 
-## [1.10.0] - Beta draft (2026-09-13)
+### Validation
 
-Prepared as a prerelease draft; public distribution is pending the manual release gates below.
+- Native Apple silicon and Intel CI passed 338 tests across 25 suites for the tagged source. The universal ad-hoc signed, unnotarized installer and its downloaded assets passed integrity and signature checks.
+- The maintainer authorized stable publication with clean-machine installation, full accessibility/appearance, and live hosting-write validation still outstanding. See [TESTING.md](TESTING.md) for evidence and limitations.
+
+## [1.10.0] - Unpublished, superseded by 1.10.1 (2026-09-13)
+
+Prepared as a beta draft and never published. All additions and fixes below are included in the stable [1.10.1 release](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1).
 
 ### Added
 
@@ -41,9 +52,9 @@ Prepared as a prerelease draft; public distribution is pending the manual releas
 - Review refresh rediscovers changed remotes and preserves drafts by destination; fork pull requests include head and test-merge checks from the destination repository, with stale results rejected.
 - Release source/tag verification and asset replacement; releases now require matching existing tags and are prepared as drafts, with an explicit beta prerelease option and validation on both Mac architectures before CI packaging.
 
-### Beta limits
+### Validation limits and later work
 
-- Live hosting permissions/protection, VoiceOver/appearance acceptance, and clean-machine downloaded-installer checks remain release gates; see `TESTING.md`. Developer ID signing and notarization are optional and are not required for the standard ad-hoc signed distribution.
+- Live hosting permissions/protection, VoiceOver/appearance acceptance, and clean-machine downloaded-installer checks were not completed for this draft and remain documented limitations of 1.10.1; see [TESTING.md](TESTING.md). Developer ID signing and notarization are optional and are not required for the standard ad-hoc signed distribution.
 - Interactive rebase editing, inline threaded-review editing, issue tracking, and non-macOS ports remain later milestones.
 
 ## [1.9.0] - 2026-07-20
@@ -155,7 +166,7 @@ Prepared as a prerelease draft; public distribution is pending the manual releas
 - History list.
 
 [Unreleased]: https://github.com/sergio-farfan/repodeck/compare/v1.10.1...HEAD
-[1.10.1]: https://github.com/sergio-farfan/repodeck/compare/v1.10.0...v1.10.1
+[1.10.1]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1
 [1.10.0]: https://github.com/sergio-farfan/repodeck/compare/v1.9.0...v1.10.0
 [1.3.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.3.0
 [1.2.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.2.0

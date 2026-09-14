@@ -1,6 +1,6 @@
 # Auto-Rebase on Rejected Push Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+Steps use checkbox (`- [ ]`) syntax for tracking implementation and verification.
 
 **Goal:** Per-repo opt-in toggle: when a push is rejected as non-fast-forward, automatically `git pull --rebase --autostash` and retry the push once, with a dismissible notice on success.
 
@@ -12,13 +12,13 @@
 
 ## Global Constraints
 
-- Build: `swift build`. Tests: `swift test` (run plainly — no output-truncating pipes; per project CLAUDE.md).
+- Build: `swift build`. Tests: `swift test` (run plainly — no output-truncating pipes; see [contribution checks](../../../CONTRIBUTING.md)).
 - Tests use swift-testing (`import Testing`), NOT XCTest, and live in `Tests/RepoDeckKitTests/`.
 - `@AppStorage` does not work inside `@Observable` classes — persist via `UserDefaults.standard` directly (existing pattern).
 - All view models are `@MainActor @Observable` (Swift Observation, not `ObservableObject`).
 - No test may touch a real user repo or the network: fixtures under `FileManager.default.temporaryDirectory`, local bare repos as remotes.
 - Commits: conventional (`feat:`, `docs:` …), committed directly to `main` (this repo's convention — no feature branches).
-- No emojis anywhere. Never credit Claude/Claude Code as author or co-author in any commit, comment, or doc.
+- No emojis anywhere. Use the contributor's configured Git identity and follow the repository's authorship requirements.
 - Default behavior with the toggle off must be byte-for-byte unchanged.
 
 ---

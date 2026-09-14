@@ -9,7 +9,7 @@ for test_script in Tests/ReleaseScripts/test-*.sh; do "$test_script"; done
 Scripts/bundle.sh
 ```
 
-The last command produces and verifies a universal development app; it does not launch or publish it. Do not claim a signed or notarized release was validated unless those paths were actually exercised with a Developer ID and notarization profile. CI is defined in `.github/workflows/ci.yml` and uses Xcode 26.3 on macOS 15, testing natively on both Apple silicon (`macos-15`) and Intel (`macos-15-intel`). These labels follow GitHub's [runner image inventory](https://github.com/actions/runner-images#available-images); update them deliberately if availability changes.
+The last command produces and verifies a universal app; it does not launch or publish it. Do not claim Developer ID signing or notarization was validated unless those paths were actually exercised with the corresponding identity and notarization profile. CI is defined in `.github/workflows/ci.yml` and uses Xcode 26.3 on macOS 15, testing natively on both Apple silicon (`macos-15`) and Intel (`macos-15-intel`). These labels follow GitHub's [runner image inventory](https://github.com/actions/runner-images#available-images); update them deliberately if availability changes.
 
 Keep tests isolated from shared process state: Swift Testing runs unrelated tests concurrently in the same process. Use per-test temporary directories/configuration and injected services. A `.serialized` suite does not serialize itself against unrelated suites.
 
@@ -19,7 +19,7 @@ Release workflow validation reuses this native ARM/Intel matrix at one resolved 
 
 ## Manual acceptance matrix
 
-These are required checks to perform before a public release, not a record that they have already passed. Use temporary repositories and non-production hosting projects.
+This matrix guides manual validation; it is not a record that the checks have passed. Record completed and outstanding checks so the maintainer can make an explicit publication decision with those limitations. Use temporary repositories and non-production hosting projects. For stable 1.10.1, the maintainer authorized publication with the outstanding checks recorded below.
 
 The standard release is ad-hoc signed and unnotarized. Developer ID signing and notarization are not release gates. Their validation applies only if the maintainer later opts into that distribution and advertises those capabilities.
 
@@ -34,21 +34,21 @@ The standard release is ad-hoc signed and unnotarized. Developer ID signing and 
 | Hosting | With test credentials, verify GitHub and GitLab where configured; verify unsupported hosts display useful guidance; multi-account/host setups, forks with duplicate branch names, non-default remotes, no open PR, permission errors, offline launch and reconnect. Check links open the correct project's PR/MR. |
 | Distribution | Verify the checksum and ad-hoc app signature, then install and launch the download on clean Apple silicon and Intel Macs running supported macOS. Check the documented app-specific Privacy & Security approval and offline launch. Only for an optionally notarized release, also verify Developer ID signatures and stapled tickets. |
 
-Record the build commit, macOS/toolchain, scenarios exercised, and failures in the release draft. Automated fixture tests alone do not validate real credential helpers, accessibility behavior, or Gatekeeper.
+Record the build commit, macOS/toolchain, scenarios exercised, failures, and outstanding checks in the release notes. Automated fixture tests alone do not validate real credential helpers, accessibility behavior, or Gatekeeper.
 
 ## Local beta validation — 2026-09-13
 
-The development changes were validated on macOS 27.0 with Xcode 26.6 / Swift 6.3.3. CI declares Xcode 26.3 / Swift 6.2 and separate native Apple silicon and Intel runners. The supported deployment minimum remains macOS 15; a clean-machine macOS 15 check is still required before release.
+The development changes were validated on macOS 27.0 with Xcode 26.6 / Swift 6.3.3. CI declares Xcode 26.3 / Swift 6.2 and separate native Apple silicon and Intel runners. The supported deployment minimum remains macOS 15; a clean-machine macOS 15 check was not performed.
 
 - The app and libraries build; the universal app contains both arm64 and x86_64 slices and passes ad-hoc signature verification.
 - The final run passed **335 tests across 25 suites on each architecture**: Apple silicon and the compiled Intel test bundle under Rosetta. Xcode's installed SwiftPM helper was ARM-only, so the Intel run used a temporary x86_64 loader calling the standard `Testing.__swiftPMEntryPoint` on the unchanged test bundle. Native Intel CI avoids that local toolchain workaround.
 - Every shell script passed syntax checks, and offline release preflight regressions passed. No release was created or uploaded during this development validation.
 - Visual inspection exercised the dashboard, linked sibling-worktree discovery, and history graph in disposable repositories. After the UI automation connection recovered, native accessibility inspection and screenshots verified basic navigation, the compact Workspace menu, and the history graph at a 900×582 window size. The full keyboard/VoiceOver matrix, appearance settings, and editor/terminal combinations are not certified by this run.
-- No live hosting writes or clean-machine downloaded-installer verification were performed; those remain release gates above. Developer ID signing and notarization were not exercised because they are outside the standard distribution. Hosting tests use isolated transport responses and local Git remotes.
+- No live hosting writes or clean-machine downloaded-installer verification were performed. Developer ID signing and notarization were not exercised because they are outside the standard distribution. Hosting tests use isolated transport responses and local Git remotes.
 
-Native GitHub CI also passed **335 tests across 25 suites on each architecture**, along with builds, shell checks, release-script regressions, and a universal app build, for the merged feature source at `cd99330f9be56881b0f94f89501916b3c95d6b62`: [validation run](https://github.com/sergio-farfan/repodeck/actions/runs/34795082178). Version 1.10.0 (build 12) is being prepared as a beta draft; its release notes record the final tagged commit, packaging toolchain, and installer verification results.
+Native GitHub CI also passed **335 tests across 25 suites on each architecture**, along with builds, shell checks, release-script regressions, and a universal app build, for the merged feature source at `cd99330f9be56881b0f94f89501916b3c95d6b62`: [validation run](https://github.com/sergio-farfan/repodeck/actions/runs/34795082178). Version 1.10.0 (build 12) was prepared as a beta draft; its tagged-source and installer verification results are recorded below. That draft remains unpublished and is superseded by stable 1.10.1.
 
-See the test runner's reported total rather than a fixed README count as cases are added. The broader workflows remain a development beta until the manual gates pass.
+See the test runner's reported total rather than a fixed README count as cases are added. The results above describe the development validation at that time; they do not certify the outstanding manual scenarios.
 
 ## Version 1.10.0 draft installer — 2026-09-13
 
@@ -66,4 +66,10 @@ The timeout-diagnostics follow-up passed 338 tests across 25 suites locally, inc
 
 Native inspection of the rebuilt app verified live GitHub review navigation and the bounded review-list layout. Full minimum-window, large-text, and VoiceOver acceptance remains pending. The icon report in #1 concerned older packaging; the 1.10.0 universal bundle included its nested resource bundle. Version 1.10.1 makes missing icon resources nonfatal and fixes the plain-executable fallback, without claiming a reproduced launch failure in the 1.10.0 universal installer.
 
-The version 1.10.0 tag and assets remain unchanged. The 1.10.1 draft notes record the final source commit, native CI, and downloaded-installer evidence when prepared; public publication remains subject to the manual matrix above.
+### Stable publication and validation limits
+
+[Version 1.10.1](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1) was published as the latest stable release on September 13, 2026, at 21:45 MDT (`2026-09-14T03:45:19Z`), at tagged source `0c4d47afc26e05aaa0362516287a73ef86098b5e`. [Native CI for that commit](https://github.com/sergio-farfan/repodeck/actions/runs/34799832600) passed **338 tests across 25 suites on each architecture**, using Xcode 26.3 / Swift 6.2.4 on Apple silicon and Intel.
+
+The existing three assets were reused from the verified draft. Local and downloaded installer checks confirmed checksum and image integrity, both architecture slices, and the ad-hoc app signature. After publication, the public evergreen `RepoDeck.dmg` download was fetched without authentication; its SHA-256 was `a3098d16dbaf76debf4c298adc1590cef0d366502a2bac8ec5a1599f417093bc`, matching the verified installer, and the image was byte-identical to the local build. The release is unnotarized, following the project's standard distribution; no Developer ID membership or notarization is required. The version 1.10.0 tag and assets remain unchanged in an unpublished, superseded draft.
+
+The maintainer explicitly chose stable publication with clean-machine installation and first launch, the full keyboard/VoiceOver/appearance matrix, and live GitHub/GitLab write permissions and protection checks still outstanding. Those are validation limits, not checks that passed. The earlier read-only GitHub smoke checks and automated fixtures do not establish those results.

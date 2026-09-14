@@ -78,7 +78,7 @@ extension EnvironmentValues {
 }
 
 extension Theme {
-    /// Flat sidebar pane color (ChatGPT-desktop look). Static + hardcoded on
+    /// Flat, neutral sidebar pane color. Static + hardcoded on
     /// purpose — not a ThemeSettings knob; promote later if ever needed.
     static func sidebarBackground(for scheme: ColorScheme) -> Color {
         scheme == .dark

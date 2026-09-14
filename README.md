@@ -16,7 +16,7 @@
 
 Track a few dozen local git repositories and one question gets hard to answer at a glance: which ones have uncommitted work, and which ones are behind their remote and need a pull? Finding out normally means opening each folder, one at a time, just to check. RepoDeck answers it for every tracked repo at once, in a single native window that stays current as files change on disk — no manual refresh, no per-repo client to open.
 
-> **1.10.1 beta preparation:** this checkout contains the combined reliability, workflow, and hosting changes plus follow-up resource-loading and validation fixes. The beta is being prepared as a draft pending the manual checks in [TESTING.md](TESTING.md). The latest public download remains 1.9.0 and does not include every feature described here.
+> **[1.10.1 is the latest stable release](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1)**, published September 13, 2026. It includes the combined reliability, Git workflow, and hosting changes plus resource-loading and timeout-diagnostic fixes. See [TESTING.md](TESTING.md) for completed and outstanding validation.
 
 ## Download
 
@@ -90,8 +90,8 @@ Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are o
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| 1.10.1 beta | Draft preparation | Combined Git-client beta with safer icon loading, clearer review layout, and reliable timeout diagnostics; public release pending validation |
-| 1.10.0 beta | Development draft | Reliability fixes, commit graph, branches/worktrees, conflict resolver, and GitHub/GitLab reviews; followed by 1.10.1 |
+| [1.10.1](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1) | 2026-09-13 | Commit graph, branches/worktrees, conflict resolver, GitHub/GitLab reviews, reliability fixes, safer icon loading, and clearer review layout |
+| 1.10.0 | Unpublished draft | Superseded by 1.10.1, which includes all of its additions and fixes |
 | [1.9.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.9.0) | 2026-07-20 | Hide and restore repositories; sidebar/footer refinements |
 | [1.8.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.8.0) | 2026-07-20 | Per-repository identity footer and sidebar restyle |
 | [1.7.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.7.0) | 2026-07-15 | Hunk staging from the diff view — stage or unstage one hunk at a time |
@@ -107,13 +107,13 @@ Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are o
 
 Unordered and undated — priorities shift with real-world use:
 
-- **Verified public release** — complete live hosting, accessibility, and clean-machine installation/first-launch checks for the combined ad-hoc signed beta.
+- **Manual workflow validation** — complete the outstanding live hosting, accessibility, and clean-machine installation/first-launch checks documented for 1.10.1.
 - **Optional signing upgrade** — consider Developer ID signing and notarization only if the maintainer later chooses Apple Developer Program membership.
 - **Broader workflow coverage** — keep extending fixtures for worktrees, unusual paths, file modes, hooks, and multi-account hosting.
 - **PR review state on the badge** — surface approved / changes-requested next to the CI dot (already parsed, not yet shown).
 - **Additional hosting services** — evaluate demand beyond GitHub and GitLab without changing ordinary Git support.
 
-### Hosting beta limits
+### Hosting validation limits
 
 Hosting integration is exercised with fake CLI responses and isolated local Git repositories; live GitHub/GitLab account, permissions, branch-protection, and self-hosted version checks remain part of manual acceptance. Review comments are general review submissions: inline threaded-comment editing is a later milestone. GitHub shows check runs/statuses; GitLab shows the latest pipeline summary. Missing or oversized patches and read failures are explicit and offer a browser link. Credentials are not imported into RepoDeck. Saved review drafts remain local preferences, and duplicate-submission markers are attached as hidden HTML comments to posted descriptions/reviews.
 

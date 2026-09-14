@@ -1,8 +1,8 @@
 # Releasing RepoDeck
 
-The scripts build a universal Apple silicon/Intel app and create a GitHub **draft**. Choose whether the draft is a prerelease before preparing it. Public publication remains an explicit maintainer action after verification. Existing releases and their assets are never overwritten.
+The scripts build a universal Apple silicon/Intel app and create a GitHub **draft**. Choose whether the draft is a prerelease before preparing it. Public publication remains an explicit maintainer action after reviewing verification results and any outstanding checks. Existing tags and assets are never overwritten; an existing draft can be promoted with explicit authorization as described below.
 
-RepoDeck's standard release is **ad-hoc signed and unnotarized**. The maintainer is not enrolled in the Apple Developer Program; Developer ID signing and notarization are optional future improvements, not prerequisites for a GitHub release. Validate the actual distribution, including the first-launch experience on clean supported Macs, and state its signing status in the release notes.
+RepoDeck's standard release is **ad-hoc signed and unnotarized**. The maintainer is not enrolled in the Apple Developer Program; Developer ID signing and notarization are optional future improvements, not prerequisites for a GitHub release. Record validation of the actual distribution, including whether first launch on clean supported Macs was tested, and state its signing status in the release notes.
 
 ## Prepare the source
 
@@ -33,13 +33,13 @@ The signing path enables hardened runtime and a secure timestamp. With `NOTARY_P
 
 ## Prepare and verify the draft
 
-After source preparation, run the same command with `--release` to create a draft with versioned/stable DMG assets and checksum. For the combined beta, explicitly choose the prerelease channel:
+After source preparation, run the same command with `--release` to create a stable-channel draft with versioned/stable DMG assets and checksum:
 
 ```sh
-Scripts/make-dmg.sh --release --prerelease
+Scripts/make-dmg.sh --release
 ```
 
-`--prerelease` requires `--release`, marks the GitHub draft as a prerelease, and sets `--latest=false` so it does not replace the stable download. The same source, checksum, testing, and installer checks apply to beta and stable releases; neither requires Developer ID signing or notarization. The app version and tag stay numeric (`X.Y.Z` / `vX.Y.Z`); prerelease status is GitHub release metadata. Give each new version its own tag. Omit `--prerelease` only when preparing a stable release draft.
+Add `--prerelease` when the maintainer chooses a beta. That flag requires `--release`, marks the GitHub draft as a prerelease, and sets `--latest=false` so it does not replace the stable download. The same source, checksum, testing, and installer checks apply to beta and stable releases; neither requires Developer ID signing or notarization. The app version and tag stay numeric (`X.Y.Z` / `vX.Y.Z`); prerelease status is GitHub release metadata. Give each new version its own tag.
 
 The script revalidates the tag immediately before upload and uses `gh release create --verify-tag --draft` with the `origin` repository explicitly selected. An existing draft or public release is rejected; recover a failed draft deliberately in GitHub rather than replacing assets automatically.
 
@@ -49,7 +49,25 @@ Source resolution and both validation jobs have read-only repository permissions
 
 The workflow defaults to an ad-hoc signed draft. Use the local keychain workflow above for Developer ID/notarized artifacts until CI signing credentials are deliberately provisioned. Native CI validation is automatic for workflow-created drafts; local release preparation still requires completing the automated checks on both architectures before the maintainer publishes the draft.
 
-Download and verify the draft's checksum, architecture slices, source revision, signatures, and applicable notarization tickets. Complete the manual matrix in [TESTING.md](../TESTING.md), update the draft notes with actual results, and then publish explicitly. Enable GitHub immutable releases so published tags and assets remain fixed. Never move an already published version tag to repair a release; issue a new version.
+Download and verify the draft's checksum, architecture slices, source revision, signatures, and applicable notarization tickets. Review the manual matrix in [TESTING.md](../TESTING.md), record actual results and outstanding checks in the draft notes, and obtain the maintainer's explicit publication decision for the chosen channel. The maintainer may authorize publication with documented manual-validation limits; do not turn that decision into a claim those checks passed. Enable GitHub immutable releases so published tags and assets remain fixed. Never move an already published version tag to repair a release; issue a new version.
+
+## Promote an existing draft to stable
+
+An explicit instruction to publish an already verified draft as stable authorizes changing its release metadata. Reuse the existing tag and assets; do not rerun packaging, replace uploads, or create another release. Confirm the draft's source against its recorded CI commit and verify the downloaded assets first. Update its title and notes for the stable channel, including any acknowledged validation limits.
+
+The following shows the 1.10.1 promotion, authorized and completed on September 13, 2026. For another version, substitute its tag and previously verified source commit. Run the tag check from a clean checkout at that tag:
+
+```sh
+Scripts/validate-release-tag.sh v1.10.1 0c4d47afc26e05aaa0362516287a73ef86098b5e
+gh release view v1.10.1 --repo sergio-farfan/repodeck \
+  --json tagName,isDraft,isPrerelease,assets
+gh release edit v1.10.1 --repo sergio-farfan/repodeck \
+  --draft=false --prerelease=false --latest --verify-tag
+gh release view v1.10.1 --repo sergio-farfan/repodeck \
+  --json tagName,isDraft,isPrerelease,publishedAt,url,assets
+```
+
+`--verify-tag` requires the existing remote tag; the preceding source check verifies that it still identifies the recorded commit. Confirm the result is public and stable, that GitHub's latest release resolves to this version, and that the unauthenticated evergreen download matches the verified installer checksum. Version [1.10.1](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1) is the current stable/latest release. Version 1.10.0 remains an unpublished, superseded draft; its additions ship in 1.10.1.
 
 For standard unnotarized releases, verify the ad-hoc app signature and disclose the first-launch requirement. After attempting to open a trusted, checksum-verified download, users may need **System Settings → Privacy & Security → Open Anyway**. Availability can depend on macOS and device-management policy; use [Apple's app-specific instructions](https://support.apple.com/en-lamr/102445). Check notarization tickets only when a release is actually advertised as notarized.
 
