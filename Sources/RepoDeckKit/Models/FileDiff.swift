@@ -51,14 +51,46 @@ public struct FileDiff: Identifiable, Hashable, Sendable {
     public let newPath: String            // "b/…" path minus prefix; "/dev/null" for deletions
     public let isBinary: Bool             // "Binary files … differ" — hunks empty
     public let hunks: [Hunk]
+    public let oldMode: String?
+    public let newMode: String?
+    /// Lossy text is useful for a preview, but must never become an index patch.
+    public let isLosslessUTF8: Bool
+
+    public var hunkActionUnavailableReason: String? {
+        if !isLosslessUTF8 {
+            return "This diff contains text outside UTF-8. Use the whole-file action to preserve its original bytes."
+        }
+        if isBinary { return "Binary files require a whole-file action." }
+        if (oldPath != "/dev/null" && oldMode == nil) || (newPath != "/dev/null" && newMode == nil) {
+            return "This diff is missing file mode information. Refresh it or use the whole-file action."
+        }
+        if [oldMode, newMode].compactMap({ $0 }).contains(where: { $0 != "100644" && $0 != "100755" }) {
+            return "Symlinks and submodules require a whole-file action."
+        }
+        if let oldMode, let newMode, oldMode != newMode {
+            return "File mode changes require a whole-file action."
+        }
+        if oldPath != newPath, oldPath != "/dev/null", newPath != "/dev/null" {
+            return "Renames and copies require a whole-file action."
+        }
+        return nil
+    }
+
+    public var canApplyHunks: Bool { hunkActionUnavailableReason == nil }
     /// Display path: newPath unless it's /dev/null (deletion), then oldPath.
     public var displayPath: String { newPath == "/dev/null" ? oldPath : newPath }
     public var id: String { oldPath + "→" + newPath }
 
-    public init(oldPath: String, newPath: String, isBinary: Bool, hunks: [Hunk]) {
+    public init(
+        oldPath: String, newPath: String, isBinary: Bool, hunks: [Hunk],
+        oldMode: String? = nil, newMode: String? = nil, isLosslessUTF8: Bool = true
+    ) {
         self.oldPath = oldPath
         self.newPath = newPath
         self.isBinary = isBinary
         self.hunks = hunks
+        self.oldMode = oldMode
+        self.newMode = newMode
+        self.isLosslessUTF8 = isLosslessUTF8
     }
 }

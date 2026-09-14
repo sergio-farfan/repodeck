@@ -6,7 +6,7 @@ import RepoDeckKit
 /// N per-repo tasks) keeps the interlocks with scanning and bulk operations
 /// in one place and avoids long-lived task sprawl.
 @MainActor
-final class AutoFetchScheduler {
+public final class AutoFetchScheduler {
     private unowned let model: AppModel
     private var tickTask: Task<Void, Never>?
     /// Last trigger time per repo id. In-memory only; initialized lazily to
@@ -16,15 +16,15 @@ final class AutoFetchScheduler {
     private var lastFetchAt: [String: Date] = [:]
     private var startedAt = Date()
 
-    init(model: AppModel) {
+    public init(model: AppModel) {
         self.model = model
     }
 
     /// Idempotent: cancels any prior loop and resets `startedAt` so the
     /// "one interval after launch" grace period restarts too.
-    func start() {
+    public func start() {
         tickTask?.cancel()
-        startedAt = Date()
+        startedAt = model.now()
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
@@ -34,7 +34,7 @@ final class AutoFetchScheduler {
         }
     }
 
-    func stop() {
+    public func stop() {
         tickTask?.cancel()
         tickTask = nil
     }
@@ -44,7 +44,7 @@ final class AutoFetchScheduler {
         // every repo's `isBusy`; skip the whole tick rather than race either.
         guard !model.isScanning, model.bulkProgress == nil else { return }
 
-        let now = Date()
+        let now = model.now()
         var due: [RepoViewModel] = []
         for vm in model.repos {
             guard let interval = model.settings(for: vm.id).autoFetchInterval.seconds else { continue }

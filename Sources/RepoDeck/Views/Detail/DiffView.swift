@@ -1,3 +1,4 @@
+import RepoDeckCore
 import RepoDeckKit
 import SwiftUI
 
@@ -35,6 +36,7 @@ struct DiffView: View {
             }
             .buttonStyle(.borderless)
             .help("Close")
+            .accessibilityLabel("Close diff")
         }
         .padding(10)
     }
@@ -67,6 +69,10 @@ struct DiffView: View {
     private func fileSection(_ file: FileDiff) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             fileHeader(file)
+            if vm.diffHunkAction != nil, let reason = file.hunkActionUnavailableReason {
+                Text(reason + " Use the whole-file Stage or Unstage action.")
+                    .font(theme.caption).foregroundStyle(.secondary)
+            }
             if file.isBinary {
                 Text("Binary")
                     .font(theme.caption)
@@ -96,7 +102,7 @@ struct DiffView: View {
                 .font(theme.mono(10))
                 .foregroundStyle(.secondary)
             Spacer()
-            if let action = vm.diffHunkAction {
+            if let action = vm.diffHunkAction, file.canApplyHunks {
                 Button {
                     Task {
                         switch action {
@@ -142,6 +148,9 @@ private struct DiffLineRow: View {
         HStack(spacing: 0) {
             gutter(line.oldLine)
             gutter(line.newLine)
+            Text(line.kind == .addition ? "+" : line.kind == .deletion ? "−" : " ")
+                .accessibilityLabel(line.kind == .addition ? "Added" : line.kind == .deletion ? "Removed" : "Unchanged")
+                .frame(width: 12)
             Text(line.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

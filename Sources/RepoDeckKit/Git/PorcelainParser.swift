@@ -9,13 +9,11 @@ public enum PorcelainParser {
     /// record is dropped and the result's `didHitLimit` is set.
     public static func parse(_ output: Data, truncated: Bool = false) -> RepoStatus {
         var rawRecords = output.split(separator: 0x00, omittingEmptySubsequences: true)
-        var didHitLimit = false
-        if truncated, !rawRecords.isEmpty {
+        if truncated, output.last != 0, !rawRecords.isEmpty {
             rawRecords.removeLast()
-            didHitLimit = true
         }
         let records = rawRecords.map { String(decoding: $0, as: UTF8.self) }
-        return parseRecords(records, didHitLimit: didHitLimit)
+        return parseRecords(records, didHitLimit: truncated)
     }
 
     /// Convenience for tests: joins on NUL.
@@ -45,7 +43,7 @@ public enum PorcelainParser {
                 index += 1
             case "2":
                 let originalPath = index + 1 < records.count ? records[index + 1] : nil
-                parseRenameOrCopy(record, originalPath: originalPath, into: &changes)
+                if let originalPath { parseRenameOrCopy(record, originalPath: originalPath, into: &changes) }
                 index += originalPath != nil ? 2 : 1
             case "u":
                 parseUnmergedChange(record, into: &changes)

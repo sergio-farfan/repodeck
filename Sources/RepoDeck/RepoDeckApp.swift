@@ -1,3 +1,4 @@
+import RepoDeckCore
 import AppKit
 import SwiftUI
 

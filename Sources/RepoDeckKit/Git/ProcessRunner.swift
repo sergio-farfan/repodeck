@@ -1,38 +1,20 @@
-import Foundation
-#if canImport(Darwin)
 import Darwin
-#endif
+import Foundation
+import Synchronization
 
-/// Scheduling lane for a subprocess: interactive work (user-initiated
-/// actions, status refreshes) always beats background work (auto-fetch,
-/// integrations polling) for limiter slots.
 public enum SubprocessPriority: Sendable {
     case interactive
     case background
 }
 
-/// Result of a completed subprocess invocation.
-///
-/// Only this type crosses isolation boundaries; the underlying `Process`/`Pipe`
-/// objects never leave `ProcessRunner.run`.
 public struct ProcessResult: Sendable {
     public let exitCode: Int32
     public let stdout: Data
     public let stderr: String
     public let outputTruncated: Bool
-    /// True when the timeout watchdog (see `ProcessRunner.run(timeout:)`) had
-    /// to intervene because the child outlived its deadline. When true, the
-    /// exit code reflects the SIGTERM/SIGKILL signal exit, not a real
-    /// command failure.
     public let timedOut: Bool
 
-    public init(
-        exitCode: Int32,
-        stdout: Data,
-        stderr: String,
-        outputTruncated: Bool,
-        timedOut: Bool = false
-    ) {
+    public init(exitCode: Int32, stdout: Data, stderr: String, outputTruncated: Bool, timedOut: Bool = false) {
         self.exitCode = exitCode
         self.stdout = stdout
         self.stderr = stderr
@@ -41,15 +23,45 @@ public struct ProcessResult: Sendable {
     }
 }
 
-/// The single subprocess primitive the whole app funnels through: async,
-/// deadlock-free, cancellable, output-capped, and globally concurrency-bounded.
-public enum ProcessRunner {
-    /// Process-wide cap on concurrent `run` executions.
-    static let concurrencyLimit = 6
+public struct ProcessOutputLimitError: Error, LocalizedError, Sendable {
+    public var errorDescription: String? { "Command output exceeded its limit. The command was stopped." }
+    public init() {}
+}
 
-    /// Shared FIFO counting semaphore bounding git subprocesses across all
-    /// repos and bulk operations.
+public enum CommandStream: Sendable { case stdout, stderr }
+public enum CommandEvent: Sendable {
+    case output(stream: CommandStream, text: String)
+    case exit(code: Int32)
+}
+
+/// A streamed job has a separate cleanup lifetime from its event consumer.
+/// Cancellation ends an AsyncThrowingStream iterator immediately, so callers
+/// holding resources must await completion before releasing those resources.
+public struct StreamingProcess: Sendable {
+    public let events: AsyncThrowingStream<CommandEvent, Error>
+    private let producer: Task<Void, Never>
+    private let stop: @Sendable () -> Void
+
+    fileprivate init(events: AsyncThrowingStream<CommandEvent, Error>, producer: Task<Void, Never>,
+                     stop: @escaping @Sendable () -> Void) {
+        self.events = events
+        self.producer = producer
+        self.stop = stop
+    }
+
+    public func cancel() { stop() }
+
+    /// Waits for the process group to be stopped and reaped even when the
+    /// waiting task has already been cancelled.
+    public func waitForCompletion() async { await producer.value }
+}
+
+/// Runs each command in its own process group. Cancellation and limits stop the
+/// whole job, including children holding pipes open. No shell is added implicitly.
+public enum ProcessRunner {
+    static let concurrencyLimit = 6
     static let limiter = ConcurrencyLimiter(limit: concurrencyLimit)
+    public static let defaultOutputLimit = 16 * 1024 * 1024
 
     public static func run(
         _ executable: String = GitDefaults.gitPath,
@@ -61,427 +73,391 @@ public enum ProcessRunner {
         timeout: Duration? = nil,
         stdin: Data? = nil
     ) async throws -> ProcessResult {
-        // (Req 3, 10) Acquire a global slot; release on every exit path. The
-        // releaser must pass the same priority the acquirer used.
-        await limiter.acquire(priority)
-        defer { Task { await limiter.release(priority) } }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        if let workingDirectory { process.currentDirectoryURL = workingDirectory }
-
-        // (Req 4) Inherit env, force non-interactive + stable locale, caller wins.
         var env = ProcessInfo.processInfo.environment
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["LC_ALL"] = "C"
-        for (key, value) in environment { env[key] = value }
-        process.environment = env
-
-        // (Req 5) Never block on stdin — unless the caller supplies a
-        // payload to write (e.g. a patch for `git apply -`), in which case
-        // an input pipe is attached instead of the null device.
-        let stdinPipe: Pipe?
-        if stdin != nil {
-            let pipe = Pipe()
-            process.standardInput = pipe
-            stdinPipe = pipe
-        } else {
-            process.standardInput = FileHandle.nullDevice
-            stdinPipe = nil
-        }
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        // (Req 6) Bridge termination through a continuation instead of spinning
-        // or calling waitUntilExit on a thread. Set before launch so a fast
-        // child's exit is never missed.
-        let termination = TerminationSignal()
-        // Watchdog bookkeeping: a plain one-shot flag (not a continuation —
-        // nothing awaits it) telling the watchdog task whether the child has
-        // already exited on its own, so it never signals a pid that might
-        // since have been reused by the OS.
-        let watchdogState = WatchdogState()
-        process.terminationHandler = { _ in
-            Task {
-                await watchdogState.markTerminated()
-                await termination.signal()
-            }
-        }
-
-        // Launching may fail (e.g. nonexistent executable); let it throw.
-        try process.run()
-
-        // pid is Sendable, unlike Process — capture it for cancellation.
-        let pid = process.processIdentifier
-
-        // (Req 5, cont.) Write any stdin payload from a DETACHED task,
-        // started before the stdout/stderr drain loops below begin. A
-        // synchronous write-then-drain would deadlock on a large payload:
-        // the child (e.g. `git apply` echoing a conflict to stderr, or
-        // `cat` in tests) can block writing to a full stdout/stderr pipe
-        // that nothing is draining yet, while we are still blocked writing
-        // to its full stdin pipe. Running the write concurrently with the
-        // drain avoids that — whichever side's buffer fills first, the
-        // other side is already being serviced. Closing the write end after
-        // the write signals EOF to the child.
-        //
-        // If the child exits without reading all of stdin (e.g. `git apply`
-        // rejecting a patch outright, or `/usr/bin/true` never reading at
-        // all), the write end's reader is gone and the write would normally
-        // raise SIGPIPE — whose default disposition TERMINATES THE WHOLE
-        // PROCESS before `write(contentsOf:)` can even throw, so `try?`
-        // below would never get a chance to run. `F_SETNOSIGPIPE` disables
-        // that signal for this fd specifically, so a closed-reader write
-        // instead surfaces as a catchable EPIPE error, which `try?` then
-        // correctly swallows.
-        if let stdin, let stdinPipe {
-            let writeFD = stdinPipe.fileHandleForWriting.fileDescriptor
-            #if canImport(Darwin)
-            _ = fcntl(writeFD, F_SETNOSIGPIPE, 1)
-            #endif
-            Task.detached {
-                try? stdinPipe.fileHandleForWriting.write(contentsOf: stdin)
-                try? stdinPipe.fileHandleForWriting.close()
-            }
-        }
-
-        // Timeout watchdog: SIGTERM, then SIGKILL five seconds later if the
-        // child still hasn't exited. A no-op when `timeout` is nil.
-        let watchdogTask: Task<Void, Never>? = timeout.map { deadline in
-            Task {
-                try? await Task.sleep(for: deadline)
-                guard !(await watchdogState.hasTerminated) else { return }
-                await watchdogState.markTimedOut()
-                kill(pid, SIGTERM)
-                try? await Task.sleep(for: .seconds(5))
-                guard !(await watchdogState.hasTerminated) else { return }
-                kill(pid, SIGKILL)
-            }
-        }
-
-        // (Req 1, 8) Bridge each pipe to a Sendable AsyncStream. The handlers
-        // capture only the Sendable continuation; the non-Sendable Process/Pipe
-        // stay inside this function body.
-        let stdoutStream = makeByteStream(stdoutPipe.fileHandleForReading)
-        let stderrStream = makeByteStream(stderrPipe.fileHandleForReading)
-
-        // (Req 7) Terminate the child if the surrounding task is cancelled;
-        // the drain loops then end naturally at EOF.
-        return await withTaskCancellationHandler {
-            // (Req 1) Drain stderr concurrently while draining stdout, both
-            // BEFORE waiting for termination — a full pipe would otherwise
-            // deadlock the child on large output.
-            async let stderrData = drainAll(stderrStream)
-
-            var stdoutData = Data()
-            var truncated = false
-            for await chunk in stdoutStream {
-                stdoutData.append(chunk)
-                // (Req 2) Enforce the output cap mid-stream.
-                if let cap = maxOutputBytes, stdoutData.count >= cap {
-                    truncated = true
-                    process.terminate()
-                    break
-                }
-            }
-
-            // (Req 9) stderr decoded lossy UTF-8; stdout stays raw Data.
-            let stderrText = String(decoding: await stderrData, as: UTF8.self)
-
-            // Now that both streams are drained, block on actual exit.
-            await termination.wait()
-            // Termination is signalled; stop the watchdog (harmless if it
-            // already fired or if there is no watchdog at all).
-            watchdogTask?.cancel()
-
-            return ProcessResult(
-                exitCode: process.terminationStatus,
-                stdout: stdoutData,
-                stderr: stderrText,
-                outputTruncated: truncated,
-                timedOut: await watchdogState.timedOut
-            )
-        } onCancel: {
-            // Only the Sendable pid crosses into this @Sendable closure.
-            kill(pid, SIGTERM)
-        }
+        env.merge(environment) { _, override in override }
+        return try await execute(
+            executable, arguments: arguments, directory: workingDirectory?.path, environment: env,
+            limit: max(0, maxOutputBytes ?? defaultOutputLimit), priority: priority, timeout: timeout,
+            input: stdin, control: ProcessControl(), receive: nil
+        )
     }
-}
 
-// MARK: - Streaming API
-
-/// Which pipe a streamed ``CommandEvent/output(stream:text:)`` chunk came from.
-public enum CommandStream: Sendable {
-    case stdout
-    case stderr
-}
-
-/// One event from ``ProcessRunner/runStreaming``: either a chunk of decoded
-/// output from stdout/stderr as it arrives, or the terminal exit code.
-public enum CommandEvent: Sendable {
-    case output(stream: CommandStream, text: String)
-    case exit(code: Int32)
-}
-
-extension ProcessRunner {
-    /// Launches `executable` with `arguments` in `workingDirectory` and yields
-    /// output as it arrives, finishing with a single `.exit(code:)` event, then
-    /// the stream completes. Cancelling the consuming task SIGTERMs the child
-    /// (same cancellation semantics as `run`). stdout and stderr are decoded as
-    /// UTF-8 (lossy) and yielded as `.output` chunks in arrival order; chunk
-    /// boundaries are NOT line-aligned (the caller reassembles lines).
-    ///
-    /// Reuses `run`'s internals (the `makeByteStream` pipe bridge, the
-    /// `TerminationSignal` actor, the shared `ConcurrencyLimiter`, the
-    /// concurrent stdout/stderr drain that avoids pipe-full deadlock) without
-    /// modifying `run` itself. Differences from `run`, by design: no output
-    /// cap (callers of a command-runner pane render/cap lazily), and no
-    /// git-specific environment hardening (that is `run`'s concern — the
-    /// caller of this primitive decides what env it needs).
+    /// Streams at most 16 MiB per command by default. Both the pipe reader and
+    /// delivery queue are bounded; a slow consumer receives a limit error rather
+    /// than silently losing output. Standard input is closed (not an interactive terminal).
     public static func runStreaming(
         _ executable: String,
         arguments: [String],
         workingDirectory: URL? = nil,
         environment: [String: String] = [:],
-        priority: SubprocessPriority = .interactive
+        priority: SubprocessPriority = .interactive,
+        maxOutputBytes: Int = defaultOutputLimit,
+        timeout: Duration? = nil
     ) -> AsyncThrowingStream<CommandEvent, Error> {
-        AsyncThrowingStream { continuation in
-            let producer = Task {
-                // Same slot discipline as `run`: acquire before launch,
-                // release on every exit path (success, throw, or cancel).
-                await limiter.acquire(priority)
-                defer { Task { await limiter.release(priority) } }
-
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: executable)
-                process.arguments = arguments
-                if let workingDirectory { process.currentDirectoryURL = workingDirectory }
-
-                // Inherit env, caller overrides win. Unlike `run`, this
-                // primitive does not force GIT_TERMINAL_PROMPT/LC_ALL — the
-                // caller decides what a given command needs.
-                var env = ProcessInfo.processInfo.environment
-                for (key, value) in environment { env[key] = value }
-                process.environment = env
-
-                // Never block on stdin: non-interactive, like `run`.
-                process.standardInput = FileHandle.nullDevice
-
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-
-                let termination = TerminationSignal()
-                process.terminationHandler = { _ in
-                    Task { await termination.signal() }
-                }
-
-                do {
-                    try process.run()
-                } catch {
-                    // Bad executable etc.: finish the stream by throwing,
-                    // rather than emitting an `.exit`.
-                    continuation.finish(throwing: error)
-                    return
-                }
-
-                let pid = process.processIdentifier
-
-                let stdoutStream = makeByteStream(stdoutPipe.fileHandleForReading)
-                let stderrStream = makeByteStream(stderrPipe.fileHandleForReading)
-
-                await withTaskCancellationHandler {
-                    // Drain both pipes concurrently — the same
-                    // deadlock-avoidance as `run`, but yielding chunks into
-                    // the merged event stream instead of accumulating them.
-                    async let stdoutDone: Void = drainOutput(stdoutStream, as: .stdout, into: continuation)
-                    async let stderrDone: Void = drainOutput(stderrStream, as: .stderr, into: continuation)
-                    _ = await (stdoutDone, stderrDone)
-
-                    // Both pipes are at EOF; now block on actual exit.
-                    await termination.wait()
-                    continuation.yield(.exit(code: process.terminationStatus))
-                    continuation.finish()
-                } onCancel: {
-                    // Only the Sendable pid crosses into this @Sendable
-                    // closure. SIGTERM lets the pipes drain to EOF above,
-                    // exactly as `run` does; we do not throw on cancellation.
-                    kill(pid, SIGTERM)
-                }
-            }
-
-            // Fires when the consumer's iteration is cancelled (or the
-            // stream is otherwise torn down) — propagate that into the
-            // producer task so its `withTaskCancellationHandler` above
-            // fires and SIGTERMs the child. A no-op if the producer has
-            // already finished normally.
-            continuation.onTermination = { _ in
-                producer.cancel()
-            }
-        }
+        startStreaming(executable, arguments: arguments, workingDirectory: workingDirectory,
+                       environment: environment, priority: priority, maxOutputBytes: maxOutputBytes,
+                       timeout: timeout).events
     }
-}
 
-/// Drains a single pipe's byte stream into the shared `CommandEvent`
-/// continuation, tagging each chunk with its origin. Runs to EOF.
-private func drainOutput(
-    _ stream: AsyncStream<Data>,
-    as origin: CommandStream,
-    into continuation: AsyncThrowingStream<CommandEvent, Error>.Continuation
-) async {
-    for await chunk in stream {
-        continuation.yield(.output(stream: origin, text: String(decoding: chunk, as: UTF8.self)))
-    }
-}
-
-// MARK: - Pipe draining
-
-/// Bridges a readable `FileHandle` to a `Sendable` `AsyncStream<Data>`.
-///
-/// The `@Sendable` readability handler captures only the stream continuation and
-/// operates on the `FileHandle` passed to it, so no non-Sendable state escapes.
-private func makeByteStream(_ handle: FileHandle) -> AsyncStream<Data> {
-    AsyncStream(Data.self, bufferingPolicy: .unbounded) { continuation in
-        handle.readabilityHandler = { fileHandle in
-            let data = fileHandle.availableData
-            if data.isEmpty {
-                fileHandle.readabilityHandler = nil
+    /// Use this handle when job cleanup must finish before releasing a lock or
+    /// reporting the surrounding operation as idle.
+    public static func startStreaming(
+        _ executable: String,
+        arguments: [String],
+        workingDirectory: URL? = nil,
+        environment: [String: String] = [:],
+        priority: SubprocessPriority = .interactive,
+        maxOutputBytes: Int = defaultOutputLimit,
+        timeout: Duration? = nil
+    ) -> StreamingProcess {
+        let (events, continuation) = AsyncThrowingStream<CommandEvent, Error>.makeStream(bufferingPolicy: .bufferingOldest(64))
+        let control = ProcessControl()
+        let producer = Task {
+            var env = ProcessInfo.processInfo.environment
+            env.merge(environment) { _, override in override }
+            do {
+                let result = try await execute(
+                    executable, arguments: arguments, directory: workingDirectory?.path, environment: env,
+                    limit: max(0, maxOutputBytes), priority: priority, timeout: timeout, input: nil,
+                    control: control
+                ) { event in
+                    switch continuation.yield(event) {
+                    case .dropped: control.limitOutput()
+                    case .terminated: control.cancel()
+                    case .enqueued: break
+                    @unknown default: control.cancel()
+                    }
+                }
+                if result.outputTruncated { throw ProcessOutputLimitError() }
+                // Preserve a terminal event even when the consumer has just
+                // filled the queue; an overflow is an explicit failure.
+                if case .dropped = continuation.yield(.exit(code: result.exitCode)) {
+                    throw ProcessOutputLimitError()
+                }
                 continuation.finish()
-            } else {
-                continuation.yield(data)
+            } catch {
+                continuation.finish(throwing: error)
             }
+        }
+        continuation.onTermination = { _ in
+            control.cancel()
+            producer.cancel()
+        }
+        return StreamingProcess(events: events, producer: producer) {
+            control.cancel()
+            producer.cancel()
+        }
+    }
+
+    private static func execute(
+        _ executable: String, arguments: [String], directory: String?, environment: [String: String],
+        limit: Int, priority: SubprocessPriority, timeout: Duration?, input: Data?, control: ProcessControl,
+        receive: (@Sendable (CommandEvent) -> Void)?
+    ) async throws -> ProcessResult {
+        try await limiter.acquire(priority)
+        do {
+            try Task.checkCancellation()
+            let result = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ProcessResult, Error>) in
+                    // poll/waitpid are blocking APIs. Keep them off Swift's
+                    // cooperative executor; the limiter bounds these workers.
+                    DispatchQueue.global(qos: priority == .background ? .utility : .userInitiated).async {
+                        do {
+                            let result = try runJob(executable, arguments: arguments, directory: directory,
+                                                    environment: environment, limit: limit, timeout: timeout,
+                                                    input: input, control: control, receive: receive)
+                            continuation.resume(returning: result)
+                        } catch { continuation.resume(throwing: error) }
+                    }
+                }
+            } onCancel: {
+                control.cancel()
+            }
+            try Task.checkCancellation()
+            await limiter.release(priority)
+            return result
+        } catch {
+            await limiter.release(priority)
+            throw error
         }
     }
 }
 
-/// Accumulates every chunk of a stream to EOF.
-private func drainAll(_ stream: AsyncStream<Data>) async -> Data {
-    var data = Data()
-    for await chunk in stream { data.append(chunk) }
-    return data
+/// Cancellation can arrive before the worker starts. The spawn and cancellation
+/// flag share a lock so an already-cancelled job never launches after waiting.
+private final class ProcessControl: Sendable {
+    struct State { var cancelled = false; var outputLimited = false }
+    let state = Mutex(State())
+    func cancel() { state.withLock { $0.cancelled = true } }
+    func limitOutput() { state.withLock { $0.outputLimited = true } }
 }
 
-// MARK: - Concurrency limiter
+/// Blocking POSIX work lives only on a dispatch worker; no descriptors, pointers,
+/// or mutable Foundation Process objects cross an isolation boundary.
+private func runJob(
+    _ executable: String, arguments: [String], directory: String?, environment: [String: String],
+    limit: Int, timeout: Duration?, input: Data?, control: ProcessControl,
+    receive: (@Sendable (CommandEvent) -> Void)?
+) throws -> ProcessResult {
+    var descriptors: [Int32] = []
+    defer { for fd in descriptors where fd >= 0 { Darwin.close(fd) } }
+    func makePipe() throws -> (Int32, Int32) {
+        var pair: [Int32] = [-1, -1]
+        guard pipe(&pair) == 0 else { throw posixError(errno) }
+        descriptors.append(contentsOf: pair)
+        for fd in pair { _ = fcntl(fd, F_SETFD, FD_CLOEXEC) }
+        return (pair[0], pair[1])
+    }
+    func closeFD(_ fd: inout Int32) {
+        guard fd >= 0 else { return }
+        Darwin.close(fd)
+        if let index = descriptors.firstIndex(of: fd) { descriptors[index] = -1 }
+        fd = -1
+    }
+    let out = try makePipe()
+    let err = try makePipe()
+    var outputFD = out.0, errorFD = err.0
+    let inputPipe = try input.map { _ in try makePipe() }
+    var inputFD = inputPipe?.1 ?? -1
+    let nullFD = open("/dev/null", O_RDONLY | O_CLOEXEC)
+    guard nullFD >= 0 else { throw posixError(errno) }
+    descriptors.append(nullFD)
 
-/// Actor-based two-tier FIFO counting semaphore. No locks, no
-/// `nonisolated(unsafe)`.
-///
-/// Interactive work always beats background work: an interactive `acquire`
-/// only ever competes for the shared `available` pool, while background work
-/// is additionally capped at `backgroundLimit` concurrent slots (of the
-/// shared `limit`) so it can never starve interactive callers of the
-/// remaining `limit - backgroundLimit` slots. `release` hands a freed slot
-/// directly to the oldest interactive waiter if any (queue-jump), else to the
-/// oldest background waiter if the background cap allows, else returns it to
-/// `available` — a slot handed directly to a waiter keeps `available`
-/// consumed the whole time, so there is never an increment-then-decrement
-/// race.
+    var actions: posix_spawn_file_actions_t?
+    var attributes: posix_spawnattr_t?
+    try checkPOSIX(posix_spawn_file_actions_init(&actions))
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    try checkPOSIX(posix_spawnattr_init(&attributes))
+    defer { posix_spawnattr_destroy(&attributes) }
+    try checkPOSIX(posix_spawn_file_actions_adddup2(&actions, inputPipe?.0 ?? nullFD, STDIN_FILENO))
+    try checkPOSIX(posix_spawn_file_actions_adddup2(&actions, out.1, STDOUT_FILENO))
+    try checkPOSIX(posix_spawn_file_actions_adddup2(&actions, err.1, STDERR_FILENO))
+    for fd in descriptors { try checkPOSIX(posix_spawn_file_actions_addclose(&actions, fd)) }
+    if let directory { try checkPOSIX(posix_spawn_file_actions_addchdir_np(&actions, directory)) }
+    try checkPOSIX(posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)))
+    try checkPOSIX(posix_spawnattr_setpgroup(&attributes, 0))
+    var mask = sigset_t(0)
+    sigemptyset(&mask)
+    try checkPOSIX(posix_spawnattr_setsigmask(&attributes, &mask))
+    var defaults = sigset_t(0)
+    sigemptyset(&defaults)
+    sigaddset(&defaults, SIGTERM)
+    sigaddset(&defaults, SIGPIPE)
+    try checkPOSIX(posix_spawnattr_setsigdefault(&attributes, &defaults))
+
+    let argv = ([executable] + arguments).map { strdup($0) } + [nil]
+    let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    defer {
+        for pointer in argv { free(pointer) }
+        for pointer in envp { free(pointer) }
+    }
+    var pid: pid_t = 0
+    try control.state.withLock { state in
+        if state.cancelled { throw CancellationError() }
+        try argv.withUnsafeBufferPointer { argv in
+            try envp.withUnsafeBufferPointer { envp in
+                try checkPOSIX(posix_spawn(&pid, executable, &actions, &attributes,
+                                          UnsafeMutablePointer(mutating: argv.baseAddress!),
+                                          UnsafeMutablePointer(mutating: envp.baseAddress!)))
+            }
+        }
+    }
+    // Parent never retains the write ends of the child's output pipes.
+    for fd in [out.1, err.1, inputPipe?.0 ?? nullFD] {
+        var fd = fd
+        closeFD(&fd)
+    }
+    for fd in [outputFD, errorFD, inputFD] where fd >= 0 {
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+    }
+    if inputFD >= 0 { _ = fcntl(inputFD, F_SETNOSIGPIPE, 1) }
+
+    let started = ContinuousClock.now
+    let deadline = timeout.map { started.advanced(by: $0) }
+    var stoppingAt: ContinuousClock.Instant?
+    var sentKill = false
+    var childExit: Int32?
+    var timedOut = false
+    var truncated = false
+    var stdout = Data(), stderr = Data()
+    var captured = 0, inputOffset = 0
+    var outDecoder = StreamTextDecoder(), errDecoder = StreamTextDecoder()
+    var buffer = [UInt8](repeating: 0, count: 32 * 1024)
+
+    func beginStopping() {
+        guard stoppingAt == nil else { return }
+        stoppingAt = .now
+        kill(-pid, SIGTERM)
+        closeFD(&inputFD)
+    }
+    // WNOWAIT retains the leader until group cleanup finishes, preventing pid /
+    // process-group ID reuse while we still need to signal descendants.
+    func inspectExit() {
+        guard childExit == nil else { return }
+        var info = siginfo_t()
+        if waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0, info.si_pid == pid {
+            childExit = info.si_status
+        }
+    }
+    func readOutput(_ fd: inout Int32, stream: CommandStream, decoder: inout StreamTextDecoder, data: inout Data) {
+        guard fd >= 0 else { return }
+        for _ in 0..<16 {
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            if count == 0 { closeFD(&fd); break }
+            if count < 0 {
+                if errno != EAGAIN && errno != EINTR { closeFD(&fd) }
+                break
+            }
+            let accepted = min(count, max(0, limit - captured))
+            if accepted > 0 {
+                let bytes = Data(buffer.prefix(accepted))
+                captured += accepted
+                if let receive {
+                    let text = decoder.append(bytes)
+                    if !text.isEmpty { receive(.output(stream: stream, text: text)) }
+                } else { data.append(bytes) }
+            }
+            if accepted < count { truncated = true; beginStopping() }
+        }
+        if fd < 0, let receive {
+            let tail = decoder.finish()
+            if !tail.isEmpty { receive(.output(stream: stream, text: tail)) }
+        }
+    }
+
+    while true {
+        let state = control.state.withLock { $0 }
+        if state.cancelled { beginStopping() }
+        if state.outputLimited { truncated = true; beginStopping() }
+        if let deadline, ContinuousClock.now >= deadline, stoppingAt == nil {
+            timedOut = true
+            beginStopping()
+        }
+        readOutput(&outputFD, stream: .stdout, decoder: &outDecoder, data: &stdout)
+        readOutput(&errorFD, stream: .stderr, decoder: &errDecoder, data: &stderr)
+        if inputFD >= 0, let input {
+            if inputOffset == input.count { closeFD(&inputFD) }
+            else {
+                let written = input.withUnsafeBytes { bytes in
+                    Darwin.write(inputFD, bytes.baseAddress!.advanced(by: inputOffset), min(32 * 1024, input.count - inputOffset))
+                }
+                if written > 0 { inputOffset += written }
+                else if written < 0 && errno != EAGAIN && errno != EINTR { closeFD(&inputFD) }
+            }
+        }
+        inspectExit()
+        // A completed command owns its background children too. Shut them down
+        // before returning, even if they inherited or redirected the job's pipes.
+        if childExit != nil {
+            if outputFD < 0 && errorFD < 0 { break }
+            beginStopping()
+        }
+        if let stoppingAt {
+            let elapsed = stoppingAt.duration(to: .now)
+            if elapsed >= .milliseconds(500), !sentKill { kill(-pid, SIGKILL); sentKill = true }
+            if elapsed >= .seconds(1) {
+                closeFD(&outputFD)
+                closeFD(&errorFD)
+                // An escaped descendant cannot hold the caller's pipes open.
+                if childExit != nil { break }
+            }
+        }
+        var polls = [pollfd]()
+        if outputFD >= 0 { polls.append(pollfd(fd: outputFD, events: Int16(POLLIN), revents: 0)) }
+        if errorFD >= 0 { polls.append(pollfd(fd: errorFD, events: Int16(POLLIN), revents: 0)) }
+        if inputFD >= 0 { polls.append(pollfd(fd: inputFD, events: Int16(POLLOUT), revents: 0)) }
+        _ = poll(&polls, nfds_t(polls.count), 20)
+    }
+    kill(-pid, SIGKILL)
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+    if control.state.withLock({ $0.cancelled }) { throw CancellationError() }
+    return ProcessResult(exitCode: childExit ?? 0, stdout: stdout, stderr: String(decoding: stderr, as: UTF8.self),
+                         outputTruncated: truncated || control.state.withLock { $0.outputLimited }, timedOut: timedOut)
+}
+
+private func posixError(_ code: Int32) -> POSIXError { POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
+private func checkPOSIX(_ code: Int32) throws { if code != 0 { throw posixError(code) } }
+
+/// Keep incomplete UTF-8 scalars between reads instead of replacing a split
+/// multibyte character with replacement glyphs at arbitrary pipe boundaries.
+private struct StreamTextDecoder {
+    var pending = Data()
+    mutating func append(_ bytes: Data) -> String {
+        pending.append(bytes)
+        var prefixCount = pending.count
+        let values = Array(pending.suffix(4))
+        for index in values.indices.reversed() {
+            let value = values[index]
+            if value & 0xc0 == 0x80 { continue }
+            let needed = value >= 0xf0 && value <= 0xf4 ? 4 : value >= 0xe0 && value <= 0xef ? 3 : value >= 0xc2 && value <= 0xdf ? 2 : 1
+            let present = values.count - index
+            if present < needed { prefixCount -= present }
+            break
+        }
+        let result = String(decoding: pending.prefix(prefixCount), as: UTF8.self)
+        pending.removeFirst(prefixCount)
+        return result
+    }
+    mutating func finish() -> String {
+        defer { pending.removeAll() }
+        return String(decoding: pending, as: UTF8.self)
+    }
+}
+
 actor ConcurrencyLimiter {
+    private struct Waiter { let id: UUID; let continuation: CheckedContinuation<Void, Error> }
     private let limit: Int
     private let backgroundLimit: Int
     private var available: Int
-    private var interactiveWaiters: [CheckedContinuation<Void, Never>] = []
-    private var backgroundWaiters: [CheckedContinuation<Void, Never>] = []
-    private var activeBackground: Int = 0
+    private var interactiveWaiters: [Waiter] = []
+    private var backgroundWaiters: [Waiter] = []
+    private var activeBackground = 0
+    var waitingCount: Int { interactiveWaiters.count + backgroundWaiters.count }
 
     init(limit: Int, backgroundLimit: Int = 4) {
         self.limit = limit
-        self.backgroundLimit = backgroundLimit
+        self.backgroundLimit = min(limit, backgroundLimit)
         self.available = limit
     }
 
-    func acquire(_ priority: SubprocessPriority) async {
-        switch priority {
-        case .interactive:
-            if available > 0 {
-                available -= 1
-                return
+    func acquire(_ priority: SubprocessPriority) async throws {
+        try Task.checkCancellation()
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()); return }
+                if available > 0 && (priority == .interactive || activeBackground < backgroundLimit) {
+                    available -= 1
+                    if priority == .background { activeBackground += 1 }
+                    continuation.resume()
+                } else {
+                    let waiter = Waiter(id: id, continuation: continuation)
+                    if priority == .interactive { interactiveWaiters.append(waiter) }
+                    else { backgroundWaiters.append(waiter) }
+                }
             }
-            await withCheckedContinuation { continuation in
-                interactiveWaiters.append(continuation)
-            }
-
-        case .background:
-            if available > 0 && activeBackground < backgroundLimit {
-                available -= 1
-                activeBackground += 1
-                return
-            }
-            await withCheckedContinuation { continuation in
-                backgroundWaiters.append(continuation)
-            }
+        } onCancel: {
+            Task { await self.cancel(id) }
         }
     }
 
-    /// The releaser must pass the same priority it acquired with.
+    private func cancel(_ id: UUID) {
+        if let index = interactiveWaiters.firstIndex(where: { $0.id == id }) {
+            interactiveWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+        } else if let index = backgroundWaiters.firstIndex(where: { $0.id == id }) {
+            backgroundWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+        }
+    }
+
     func release(_ priority: SubprocessPriority) {
-        if case .background = priority {
-            activeBackground -= 1
-        }
-
-        if !interactiveWaiters.isEmpty {
-            // Queue-jump: interactive waiters always resume before
-            // background waiters, regardless of parking order.
-            let next = interactiveWaiters.removeFirst()
-            next.resume()
-        } else if !backgroundWaiters.isEmpty && activeBackground < backgroundLimit {
+        if priority == .background { activeBackground -= 1 }
+        if !interactiveWaiters.isEmpty { interactiveWaiters.removeFirst().continuation.resume() }
+        else if !backgroundWaiters.isEmpty && activeBackground < backgroundLimit {
             activeBackground += 1
-            let next = backgroundWaiters.removeFirst()
-            next.resume()
-        } else {
-            available = min(available + 1, limit)
-        }
+            backgroundWaiters.removeFirst().continuation.resume()
+        } else { available = min(available + 1, limit) }
     }
-}
-
-// MARK: - Termination bridge
-
-/// One-shot async signal fulfilled by `Process.terminationHandler`.
-private actor TerminationSignal {
-    private var terminated = false
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func signal() {
-        if let continuation {
-            self.continuation = nil
-            continuation.resume()
-        } else {
-            terminated = true
-        }
-    }
-
-    func wait() async {
-        if terminated { return }
-        await withCheckedContinuation { continuation in
-            if terminated {
-                continuation.resume()
-            } else {
-                self.continuation = continuation
-            }
-        }
-    }
-}
-
-// MARK: - Timeout watchdog bookkeeping
-
-/// Plain one-shot flags shared between `ProcessRunner.run` and its timeout
-/// watchdog task. Unlike `TerminationSignal`, nothing ever awaits these —
-/// they're polled once the watchdog wakes from its sleep — so a pair of
-/// booleans is enough.
-private actor WatchdogState {
-    private(set) var hasTerminated = false
-    private(set) var timedOut = false
-
-    /// Set from `Process.terminationHandler`, before signalling
-    /// `TerminationSignal`, so a watchdog waking up after normal exit never
-    /// sends a signal to a pid the OS may since have reused.
-    func markTerminated() { hasTerminated = true }
-
-    /// Set by the watchdog when it decides to intervene.
-    func markTimedOut() { timedOut = true }
 }

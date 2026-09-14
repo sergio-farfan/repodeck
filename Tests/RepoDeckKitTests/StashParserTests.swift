@@ -86,3 +86,12 @@ private func iso8601Date(_ string: String) -> Date? {
 
     #expect(stashes.count == 1)
 }
+
+@Test func stashObjectIDAndSubjectSeparatorsArePreserved() {
+    let oid = String(repeating: "a", count: 40)
+    let output = "stash@{2}\u{1f}\(oid)\u{1f}subject\u{1f}detail\u{1f}2026-07-14T09:00:00+00:00\u{0}"
+    let stash = StashParser.parse(output).first
+    #expect(stash?.oid == oid)
+    #expect(stash?.id == oid)
+    #expect(stash?.subject == "subject\u{1f}detail")
+}

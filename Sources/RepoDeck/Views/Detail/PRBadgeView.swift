@@ -19,7 +19,7 @@ struct PRBadgeView: View {
             NSWorkspace.shared.open(url)
         } label: {
             HStack(spacing: 4) {
-                statusDot
+                statusDot.accessibilityHidden(true)
                 Text("PR #\(info.number)")
                     .font(theme.caption)
                 if info.isDraft {
@@ -35,7 +35,18 @@ struct PRBadgeView: View {
             )
         }
         .buttonStyle(.plain)
-        .help(info.title)
+        .help("\(info.title) · \(checksLabel)")
+        .accessibilityLabel("Pull request \(info.number), \(info.title), \(checksLabel)\(info.isDraft ? ", draft" : "")")
+        .accessibilityHint("Open the pull request in your browser")
+    }
+
+    private var checksLabel: String {
+        switch info.checks {
+        case .passing: "Checks passing"
+        case .failing: "Checks failing"
+        case .pending: "Checks pending"
+        case .none: "No checks reported"
+        }
     }
 
     /// Green passing / red failing / amber pending / hollow (stroke-only)
@@ -45,11 +56,11 @@ struct PRBadgeView: View {
     private var statusDot: some View {
         switch info.checks {
         case .passing:
-            Circle().fill(Color.green).frame(width: 8, height: 8)
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.caption)
         case .failing:
-            Circle().fill(Color.red).frame(width: 8, height: 8)
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.red).font(.caption)
         case .pending:
-            Circle().fill(Color.orange).frame(width: 8, height: 8)
+            Image(systemName: "clock.fill").foregroundStyle(.orange).font(.caption)
         case .none:
             Circle().strokeBorder(Color.secondary, lineWidth: 1).frame(width: 8, height: 8)
         }

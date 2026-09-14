@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Outcome of `GitClient.pushWithAutoRebase(in:)`: whether the push landed
 /// on the first attempt or required a rebase-and-retry.
@@ -13,14 +14,18 @@ public enum PushOutcome: Sendable, Equatable {
 /// `pull()` and the auto-rebase branch of `pushWithAutoRebase` — and
 /// consumed by `GitClient.restoreUndoSnapshot(_:expectedHead:in:)`.
 public struct UndoSnapshot: Sendable, Equatable {
-    /// "refs/repodeck/undo/<unix-ts>"
+    /// Worktree/branch-scoped reference with a unique snapshot suffix.
     public let refName: String
     /// Full HEAD OID at snapshot time.
     public let oid: String
+    public let branchRef: String?
+    public let worktreeGitDir: String?
 
-    public init(refName: String, oid: String) {
+    public init(refName: String, oid: String, branchRef: String? = nil, worktreeGitDir: String? = nil) {
         self.refName = refName
         self.oid = oid
+        self.branchRef = branchRef
+        self.worktreeGitDir = worktreeGitDir
     }
 }
 
@@ -71,7 +76,7 @@ public struct GitClient: Sendable {
     /// stderr containing "does not have any commits" — that is not an error
     /// condition for us, it just means an empty history. See `runLogCommand`.
     public func log(in repo: URL, limit: Int = 100) async throws -> [Commit] {
-        try await runLogCommand(["log", "-n", "\(limit)", "--pretty=format:\(Self.logFormat)"], in: repo)
+        try await runLogCommand(["log", "--no-color", "--no-show-signature", "--encoding=UTF-8", "-n", "\(limit)", "--pretty=format:\(Self.logFormat)"], in: repo)
     }
 
     /// `git -C <repo> log -n <limit> --pretty=format:<same format as `log`>`
@@ -85,7 +90,7 @@ public struct GitClient: Sendable {
     /// and this behaves exactly like `log` (full recent log). Shares the
     /// exit-128 empty-repo handling with `log` via `runLogCommand`.
     public func searchLog(_ query: HistorySearchQuery, in repo: URL, limit: Int = 100) async throws -> [Commit] {
-        var arguments = ["log", "-n", "\(limit)", "--pretty=format:\(Self.logFormat)"]
+        var arguments = ["log", "--no-color", "--no-show-signature", "--encoding=UTF-8", "-n", "\(limit)", "--pretty=format:\(Self.logFormat)"]
         let text = query.text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
             switch query.field {
@@ -104,16 +109,30 @@ public struct GitClient: Sendable {
 
     /// `git -C <repo> add -- <paths>` (also stages deletions of tracked files).
     public func stage(_ paths: [String], in repo: URL) async throws {
-        try await runVoid(["add", "--"] + paths, in: repo)
+        guard !paths.isEmpty else { return }
+        try await runVoid(["--literal-pathspecs", "add", "--"] + paths, in: repo)
     }
 
     /// `git -C <repo> restore --staged -- <paths>`
     ///
-    /// Known v1 edge case: `git restore --staged` fails in a repo with no
-    /// commits yet — there is no HEAD to restore the index against. Callers
-    /// should only invoke `unstage` once at least one commit exists.
+    /// An unborn branch has no HEAD; remove entries from its index instead,
+    /// preserving all worktree files.
     public func unstage(_ paths: [String], in repo: URL) async throws {
-        try await runVoid(["restore", "--staged", "--"] + paths, in: repo)
+        guard !paths.isEmpty else { return }
+        let head = try await run(["rev-parse", "--verify", "--quiet", "HEAD"], in: repo, toleratedExitCodes: [1])
+        if head.exitCode == 1 {
+            // The index can differ from a file edited again after staging.
+            // Force only the index removal; --cached preserves worktree bytes.
+            try await runVoid(["--literal-pathspecs", "rm", "--cached", "--force", "-r", "--"] + paths, in: repo)
+        } else {
+            try await runVoid(["--literal-pathspecs", "restore", "--staged", "--"] + paths, in: repo)
+        }
+    }
+
+    /// A rename's source and destination are one user-visible change.
+    public func unstage(_ change: FileChange, in repo: URL) async throws {
+        let paths = change.statusLetter == "R" ? [change.originalPath, change.path].compactMap { $0 } : [change.path]
+        try await unstage(paths, in: repo)
     }
 
     /// `git -C <repo> add -A`
@@ -173,7 +192,7 @@ public struct GitClient: Sendable {
 
     // MARK: - Stash
 
-    /// `git -C <repo> stash list -z --format=%gd%x1f%gs%x1f%cI` -> `StashParser.parse`
+    /// Each entry includes its immutable OID alongside the displayed reflog index.
     public func stashList(in repo: URL) async throws -> [StashEntry] {
         let result = try await run(["stash", "list", "-z", "--format=\(Self.stashFormat)"], in: repo)
         return StashParser.parse(String(decoding: result.stdout, as: UTF8.self))
@@ -193,17 +212,63 @@ public struct GitClient: Sendable {
 
     /// `git -C <repo> stash apply stash@{index}`
     public func stashApply(_ index: Int, in repo: URL) async throws {
-        try await runVoid(["stash", "apply", Self.stashSelector(index)], in: repo)
+        try await stashApply(stashEntry(at: index, in: repo), in: repo)
     }
 
     /// `git -C <repo> stash pop stash@{index}`
     public func stashPop(_ index: Int, in repo: URL) async throws {
-        try await runVoid(["stash", "pop", Self.stashSelector(index)], in: repo)
+        try await stashPop(stashEntry(at: index, in: repo), in: repo)
     }
 
     /// `git -C <repo> stash drop stash@{index}`
     public func stashDrop(_ index: Int, in repo: URL) async throws {
-        try await runVoid(["stash", "drop", Self.stashSelector(index)], in: repo)
+        try await stashDrop(stashEntry(at: index, in: repo), in: repo)
+    }
+
+    public func stashApply(_ entry: StashEntry, in repo: URL) async throws {
+        let oid = try stashOID(entry)
+        try await runVoid(["stash", "apply", "--", oid], in: repo)
+    }
+
+    public func stashPop(_ entry: StashEntry, in repo: URL) async throws {
+        // Applying by OID cannot accidentally restore a newer stash. Keep the
+        // entry on any application failure, matching git stash pop semantics.
+        _ = try await currentStashSelector(for: entry, in: repo)
+        try await stashApply(entry, in: repo)
+        try await stashDrop(entry, in: repo)
+    }
+
+    public func stashDrop(_ entry: StashEntry, in repo: URL) async throws {
+        let selector = try await currentStashSelector(for: entry, in: repo)
+        try await runVoid(["stash", "drop", "--", selector], in: repo)
+    }
+
+    private func stashEntry(at index: Int, in repo: URL) async throws -> StashEntry {
+        guard let entry = try await stashList(in: repo).first(where: { $0.index == index }) else {
+            throw staleStashError()
+        }
+        return entry
+    }
+
+    private func stashOID(_ entry: StashEntry) throws -> String {
+        guard let oid = entry.oid, [40, 64].contains(oid.count), oid.allSatisfy({ $0.isHexDigit }) else {
+            throw staleStashError()
+        }
+        return oid
+    }
+
+    private func currentStashSelector(for entry: StashEntry, in repo: URL) async throws -> String {
+        let oid = try stashOID(entry)
+        let matches = try await stashList(in: repo).filter { $0.oid == oid }
+        guard matches.count == 1, let current = matches.first else { throw staleStashError() }
+        let selector = Self.stashSelector(current.index)
+        let result = try await run(["rev-parse", "--verify", selector], in: repo)
+        guard Self.outputLine(result.stdout) == oid else { throw staleStashError() }
+        return selector
+    }
+
+    private func staleStashError() -> GitError {
+        GitError(command: "git stash", exitCode: -1, stderr: "The selected stash changed or is no longer available. Refresh the stash list and try again.")
     }
 
     // MARK: - Diff
@@ -235,16 +300,16 @@ public struct GitClient: Sendable {
     /// (unstaged); `staged=true` -> `git diff --no-ext-diff --staged -- <path>`. Untracked
     /// files have no diff target — callers detect untracked (via `status`) and use
     /// `diffUntracked` instead. `--no-ext-diff` keeps a user's configured external
-    /// difftool from hijacking the output; no `--color` is passed, which is enough — git
-    /// only colors output for a TTY, and a piped subprocess never is one. `diffConfigPins`
-    /// (see above) are prepended so path parsing is stable regardless of the user's config.
+    /// difftool from hijacking the output. Color and text conversion are explicitly
+    /// disabled because these diffs also supply index patches. `diffConfigPins`
+    /// make path prefixes stable regardless of the user's config.
     ///
     /// Capped at `diffOutputLimit` bytes; a truncated result throws a `GitError` (see
     /// `diffTooLargeError`) rather than parsing a partial diff.
     ///
     /// Returns `nil` when the parse yields no file (no changes for that path).
     public func diff(path: String, staged: Bool, in repo: URL) async throws -> FileDiff? {
-        var arguments = Self.diffConfigPins + ["diff", "--no-ext-diff"]
+        var arguments = ["--literal-pathspecs"] + Self.diffConfigPins + ["diff", "--no-ext-diff", "--no-color", "--no-textconv"]
         if staged {
             arguments.append("--staged")
         }
@@ -253,7 +318,7 @@ public struct GitClient: Sendable {
         if result.outputTruncated {
             throw diffTooLargeError(arguments, in: repo)
         }
-        return DiffParser.parse(String(decoding: result.stdout, as: UTF8.self)).first
+        return DiffParser.parse(result.stdout).first
     }
 
     /// `git diff --no-ext-diff --no-index -- /dev/null <path>` for an untracked file, so it
@@ -265,7 +330,7 @@ public struct GitClient: Sendable {
     /// Capped at `diffOutputLimit` bytes; a truncated result throws a `GitError` (see
     /// `diffTooLargeError`) rather than parsing a partial diff.
     public func diffUntracked(path: String, in repo: URL) async throws -> FileDiff? {
-        let arguments = Self.diffConfigPins + ["diff", "--no-ext-diff", "--no-index", "--", "/dev/null", path]
+        let arguments = Self.diffConfigPins + ["diff", "--no-ext-diff", "--no-color", "--no-textconv", "--no-index", "--", "/dev/null", path]
         let result = try await run(
             arguments,
             in: repo,
@@ -275,10 +340,11 @@ public struct GitClient: Sendable {
         if result.outputTruncated {
             throw diffTooLargeError(arguments, in: repo)
         }
-        guard let diff = DiffParser.parse(String(decoding: result.stdout, as: UTF8.self)).first else {
+        guard let diff = DiffParser.parse(result.stdout).first else {
             return nil
         }
-        return FileDiff(oldPath: diff.oldPath, newPath: path, isBinary: diff.isBinary, hunks: diff.hunks)
+        return FileDiff(oldPath: diff.oldPath, newPath: path, isBinary: diff.isBinary, hunks: diff.hunks,
+                        oldMode: diff.oldMode, newMode: diff.newMode, isLosslessUTF8: diff.isLosslessUTF8)
     }
 
     /// `git show --no-ext-diff --format= <oid>` unified diff for a whole commit -> all
@@ -289,12 +355,12 @@ public struct GitClient: Sendable {
     /// Capped at `diffOutputLimit` bytes; a truncated result throws a `GitError` (see
     /// `diffTooLargeError`) rather than parsing a partial diff.
     public func diffCommit(_ oid: String, in repo: URL) async throws -> [FileDiff] {
-        let arguments = Self.diffConfigPins + ["show", "--no-ext-diff", "--format=", oid]
+        let arguments = Self.diffConfigPins + ["show", "--no-ext-diff", "--no-color", "--no-textconv", "--format=", oid, "--"]
         let result = try await run(arguments, in: repo, maxOutputBytes: diffOutputLimit)
         if result.outputTruncated {
             throw diffTooLargeError(arguments, in: repo)
         }
-        return DiffParser.parse(String(decoding: result.stdout, as: UTF8.self))
+        return DiffParser.parse(result.stdout)
     }
 
     /// Shared "diff too large" error for the three diff methods above, thrown
@@ -363,10 +429,8 @@ public struct GitClient: Sendable {
     // One-level undo for the two operations where RepoDeck itself rewrites
     // local history: `pull()` and the auto-rebase branch of
     // `pushWithAutoRebase`. A snapshot is a git ref, not in-memory state, so
-    // it survives `git gc` and app restarts. Exactly one snapshot exists per
-    // repo at a time — every write prunes all prior `refs/repodeck/undo/*`
-    // first — so there is never more than one ref to clean up or reason
-    // about.
+    // it survives `git gc`. Every worktree/branch pair has its own namespace;
+    // snapshots from another worktree or branch are never pruned or restored.
 
     /// Full OID of HEAD. `git rev-parse HEAD`.
     public func headOID(in repo: URL) async throws -> String {
@@ -375,16 +439,16 @@ public struct GitClient: Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Prunes ALL existing `refs/repodeck/undo/*` refs (exactly one
-    /// snapshot per repo, newest wins), then records HEAD under a fresh
-    /// ref — `refs/repodeck/undo/<unix-ts>` — via `git update-ref`, where
-    /// the timestamp is seconds since epoch at the moment of the call.
+    /// Keeps one undo reference per worktree and branch. A new snapshot is
+    /// written before pruning older ones, so a failed write retains recovery.
     public func writeUndoSnapshot(in repo: URL) async throws -> UndoSnapshot {
-        try await pruneUndoSnapshots(in: repo)
+        let context = try await undoContext(in: repo)
         let oid = try await headOID(in: repo)
-        let refName = "refs/repodeck/undo/\(Int(Date().timeIntervalSince1970))"
+        let namespace = Self.undoNamespace(gitDir: context.gitDir, branch: context.branch)
+        let refName = "\(namespace)/\(UUID().uuidString.lowercased())"
         try await runVoid(["update-ref", refName, oid], in: repo)
-        return UndoSnapshot(refName: refName, oid: oid)
+        try await pruneUndoSnapshots(namespace: namespace, keeping: refName, in: repo)
+        return UndoSnapshot(refName: refName, oid: oid, branchRef: context.branch, worktreeGitDir: context.gitDir)
     }
 
     /// Restores HEAD to `snapshot` with `git reset --keep <oid>` — `--keep`
@@ -401,13 +465,22 @@ public struct GitClient: Sendable {
     ///
     /// On success, deletes the snapshot ref.
     public func restoreUndoSnapshot(_ snapshot: UndoSnapshot, expectedHead: String, in repo: URL) async throws {
+        let context = try await undoContext(in: repo)
         let currentHead = try await headOID(in: repo)
-        guard currentHead == expectedHead else {
+        guard snapshot.worktreeGitDir == context.gitDir,
+              snapshot.branchRef == context.branch,
+              snapshot.refName.hasPrefix(Self.undoNamespace(gitDir: context.gitDir, branch: context.branch) + "/"),
+              currentHead == expectedHead else {
             throw GitError(
                 command: "git reset --keep",
                 exitCode: -1,
                 stderr: "repository has moved on since the snapshot"
             )
+        }
+        // A superseded snapshot must not be revived from a stale UI record.
+        let recorded = try await run(["rev-parse", "--verify", "--quiet", snapshot.refName], in: repo, toleratedExitCodes: [1])
+        guard recorded.exitCode == 0, Self.outputLine(recorded.stdout) == snapshot.oid else {
+            throw GitError(command: "git reset --keep", exitCode: -1, stderr: "repository has moved on since the snapshot")
         }
         try await runVoid(["reset", "--keep", snapshot.oid], in: repo)
         await discardUndoSnapshot(snapshot, in: repo)
@@ -418,20 +491,38 @@ public struct GitClient: Sendable {
     /// `git update-ref -d <refName>`; any failure (e.g. the ref is already
     /// gone) is ignored.
     public func discardUndoSnapshot(_ snapshot: UndoSnapshot, in repo: URL) async {
-        try? await runVoid(["update-ref", "-d", snapshot.refName], in: repo)
+        guard snapshot.refName.hasPrefix("refs/repodeck/undo/") else { return }
+        try? await runVoid(["update-ref", "-d", snapshot.refName, snapshot.oid], in: repo)
     }
 
-    /// Deletes every existing `refs/repodeck/undo/*` ref via
-    /// `git for-each-ref` + `update-ref -d`, so `writeUndoSnapshot` never
-    /// leaves more than the one it is about to create.
-    private func pruneUndoSnapshots(in repo: URL) async throws {
-        let result = try await run(["for-each-ref", "--format=%(refname)", "refs/repodeck/undo"], in: repo)
+    /// Prunes only the current worktree/branch's superseded snapshots.
+    private func pruneUndoSnapshots(namespace: String, keeping refName: String, in repo: URL) async throws {
+        let result = try await run(["for-each-ref", "--format=%(refname)", namespace + "/"], in: repo)
         let refs = String(decoding: result.stdout, as: UTF8.self)
             .split(separator: "\n")
             .map(String.init)
-        for ref in refs {
+        for ref in refs where ref != refName {
             try? await runVoid(["update-ref", "-d", ref], in: repo)
         }
+    }
+
+    private func undoContext(in repo: URL) async throws -> (gitDir: String, branch: String?) {
+        let directory = try await run(["rev-parse", "--absolute-git-dir"], in: repo)
+        let branch = try await run(["symbolic-ref", "--quiet", "HEAD"], in: repo, toleratedExitCodes: [1])
+        let gitDir = URL(fileURLWithPath: Self.outputLine(directory.stdout)).resolvingSymlinksInPath().standardizedFileURL.path
+        return (gitDir, branch.exitCode == 0 ? Self.outputLine(branch.stdout) : nil)
+    }
+
+    private static func undoNamespace(gitDir: String, branch: String?) -> String {
+        let identity = gitDir + "\u{0}" + (branch ?? "(detached)")
+        let digest = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        return "refs/repodeck/undo/\(digest)"
+    }
+
+    private static func outputLine(_ data: Data) -> String {
+        var result = String(decoding: data, as: UTF8.self)
+        if result.hasSuffix("\n") { result.removeLast() }
+        return result
     }
 
     // MARK: - Timeouts
@@ -449,11 +540,8 @@ public struct GitClient: Sendable {
     /// place so both stay in lockstep with `LogParser`'s field layout.
     private static let logFormat = "%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1f%D%x1e"
 
-    /// Format for `stashList`, kept in lockstep with `StashParser`'s field
-    /// layout. Deliberately has no `%x1e` — `stashList` passes `-z`, which
-    /// NUL-terminates each record itself; `%x1e` is only needed for `log`,
-    /// which has no equivalent `-z` record terminator.
-    private static let stashFormat = "%gd%x1f%gs%x1f%cI"
+    /// NUL-separated records with immutable object IDs and current reflog indices.
+    private static let stashFormat = "%gd%x1f%H%x1f%gs%x1f%cI"
 
     /// `stash@{<index>}` — the selector `stashApply`/`stashPop`/`stashDrop`
     /// pass on argv.

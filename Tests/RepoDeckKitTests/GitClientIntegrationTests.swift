@@ -10,17 +10,7 @@ import Testing
     /// Creates a unique temp git repo with a stable, non-interactive identity,
     /// runs `body` against it, then removes the temp dir unconditionally.
     private func withTempRepo(_ body: (URL, GitClient) async throws -> Void) async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repodeck-test-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        _ = try await ProcessRunner.run(arguments: ["init", "-b", "main"], workingDirectory: root)
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.email", "test@example.com"])
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.name", "Test"])
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "commit.gpgsign", "false"])
-
-        try await body(root, GitClient())
+        try await TestGitRepository.withRepository(body)
     }
 
     // MARK: 1. Fresh repo, no commits
@@ -165,7 +155,8 @@ import Testing
             }
 
             var client = GitClient()
-            client.statusOutputLimit = 64
+            // Enough for headers and several complete entries, but not all 20.
+            client.statusOutputLimit = 256
 
             let status = try await client.status(in: repo)
             #expect(status.didHitLimit == true)
@@ -180,7 +171,7 @@ import Testing
     /// `client.diff`, which pins config unrelated to what these tests
     /// assert) — used to inspect exactly what landed in the index.
     private func cachedDiffText(_ path: String, in repo: URL) async throws -> String {
-        let result = try await ProcessRunner.run(
+        let result = try await TestGitRepository.run(
             arguments: ["-C", repo.path, "diff", "--cached", "--", path]
         )
         return String(decoding: result.stdout, as: UTF8.self)
@@ -330,7 +321,7 @@ import Testing
     /// never gained a bogus path (e.g. a literal `dev/null` entry from a
     /// mis-built `diff --git` line).
     private func cachedPaths(in repo: URL) async throws -> [String] {
-        let result = try await ProcessRunner.run(arguments: ["-C", repo.path, "ls-files", "--cached"])
+        let result = try await TestGitRepository.run(arguments: ["-C", repo.path, "ls-files", "--cached"])
         return String(decoding: result.stdout, as: UTF8.self)
             .split(separator: "\n")
             .map(String.init)

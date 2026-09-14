@@ -1,0 +1,15 @@
+name: Workflow improvement
+description: Suggest a change that helps your development workflow.
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: What are you trying to do?
+      description: Describe the workflow, who it helps, and the current workaround.
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: Suggested behavior
+      description: Explain the smallest useful improvement, including editor, terminal, hosting, or accessibility needs.

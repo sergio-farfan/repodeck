@@ -1,3 +1,4 @@
+import RepoDeckCore
 import SwiftUI
 
 /// In-window, non-interactive command runner for one repo: a scrollback of
@@ -114,6 +115,11 @@ private struct CommandInputRow: View {
             runOrStopButton
         }
         .padding(8)
+        .onChange(of: vm.id) {
+            historyCursor = nil
+            draftBeforeHistory = ""
+            isRecallingHistory = false
+        }
     }
 
     @ViewBuilder
@@ -152,6 +158,7 @@ private struct CommandInputRow: View {
             setInput(history[history.count - 1 - next])
         } else {
             guard let current = historyCursor else { return .ignored }
+            guard current < history.count else { historyCursor = nil; return .handled }
             let next = current - 1
             historyCursor = next < 0 ? nil : next
             setInput(next < 0 ? draftBeforeHistory : history[history.count - 1 - next])

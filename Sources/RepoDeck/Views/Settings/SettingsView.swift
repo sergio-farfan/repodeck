@@ -1,3 +1,4 @@
+import RepoDeckCore
 import AppKit
 import SwiftUI
 
@@ -7,6 +8,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(ThemeSettings.self) private var settings
     @Environment(AppModel.self) private var model
+    @State private var workflow = WorkflowSettings()
 
     var body: some View {
         @Bindable var settings = settings
@@ -53,6 +55,8 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Slider(value: $settings.baseFontSize, in: ThemeSettings.fontSizeRange, step: 1)
+                            .accessibilityLabel("Base font size")
+                            .accessibilityValue("\(Int(settings.baseFontSize)) points")
                         Text("\(Int(settings.baseFontSize))")
                             .monospacedDigit()
                             .frame(width: 24, alignment: .trailing)
@@ -61,11 +65,23 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Integrations") {
-                LabeledContent("GitHub CLI (gh)") {
-                    Label(ghStatusText, systemImage: ghStatusSymbol)
-                        .foregroundStyle(model.isGhAvailable ? .green : .secondary)
-                }
+            Section("Developer Tools") {
+                executableRow("Git", path: $workflow.gitPath, automatic: false)
+                executableRow("GitHub CLI (gh)", path: $workflow.ghPath, automatic: true)
+                executableRow("GitLab CLI (glab)", path: $workflow.glabPath, automatic: true)
+                Text("Leave gh or glab blank to discover it on PATH. Authentication and host/account status are shown in each repository's Reviews workspace.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Applications") {
+                applicationRow("Editor", path: $workflow.editorApplicationPath, fallback: "Default file application")
+                applicationRow("Terminal", path: $workflow.terminalApplicationPath, fallback: "Choose when opened")
+                Text("Repository Settings can override these applications for individual projects.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Button("Apply Workflow Settings") { model.updateWorkflowSettings(workflow) }
+                    .disabled(workflow == model.workflowSettings)
+                if let error = model.settingsError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             }
 
             Section {
@@ -75,8 +91,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
+        .frame(width: 580, height: 700)
         .padding(.vertical, 8)
+        .onAppear { workflow = model.workflowSettings }
     }
 
     /// Live preview of the chosen UI and monospace fonts at the chosen size.
@@ -84,24 +101,33 @@ struct SettingsView: View {
         let theme = Theme(settings: settings)
         return VStack(alignment: .leading, spacing: 2) {
             Text("The quick brown fox jumps over the lazy dog")
-                .font(theme.ui(theme.baseSize))
+                .font(theme.body)
             Text("git commit -m \"fix\"")
-                .font(theme.mono(theme.baseSize))
+                .font(theme.mono(13))
         }
     }
 
-    /// "Found and authenticated" / "Found, not signed in (run gh auth
-    /// login)" / "Not installed" — the only three states `AppModel` can
-    /// resolve `gh` into (`model.gh == nil` covers "not installed";
-    /// `isGhAvailable` distinguishes the other two).
-    private var ghStatusText: String {
-        guard model.gh != nil else { return "Not installed" }
-        return model.isGhAvailable ? "Found and authenticated" : "Found, not signed in (run gh auth login)"
+    private func executableRow(_ label: String, path: Binding<String>, automatic: Bool) -> some View {
+        HStack {
+            TextField(automatic ? "\(label) (automatic when blank)" : label, text: path)
+                .textFieldStyle(.roundedBorder).accessibilityLabel("\(label) executable path")
+            Button("Choose…") {
+                if let selected = PlatformApplications.chooseExecutable(title: "Choose \(label)") { path.wrappedValue = selected }
+            }.accessibilityLabel("Choose \(label) executable")
+        }
     }
-
-    private var ghStatusSymbol: String {
-        guard model.gh != nil else { return "xmark.circle" }
-        return model.isGhAvailable ? "checkmark.circle.fill" : "exclamationmark.circle"
+    private func applicationRow(_ label: String, path: Binding<String>, fallback: String) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(PlatformApplications.displayName(path.wrappedValue, fallback: fallback))
+                .foregroundStyle(.secondary).lineLimit(1).help(path.wrappedValue)
+            Button("Choose…") {
+                if let selected = PlatformApplications.chooseApplication(title: "Choose \(label)") { path.wrappedValue = selected }
+            }.accessibilityLabel("Choose \(label)")
+            Button("Default") { path.wrappedValue = label == "Terminal" ? WorkflowSettings().terminalApplicationPath : "" }
+                .accessibilityLabel("Reset \(label) to default")
+        }
     }
 
     private var uiFontFamilies: [String] {

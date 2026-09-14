@@ -1,0 +1,22 @@
+name: Bug report
+description: Report incorrect behavior or a crash.
+body:
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps and expected behavior
+      description: Include what happened, what you expected, and whether it reproduces in a temporary repository.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: RepoDeck version, macOS version, Apple silicon or Intel, Git version, and optional hosting CLI version.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Repository setup and diagnostics
+      description: Note worktrees, submodules, remote hosting, signing or hooks, if relevant. Remove tokens, private source, and personal paths before sharing logs.

@@ -11,16 +11,12 @@ import Testing
     /// fixture setup and inspection, failing the test on non-zero exit.
     @discardableResult
     private func git(_ arguments: [String], in dir: URL) async throws -> ProcessResult {
-        let result = try await ProcessRunner.run(arguments: ["-C", dir.path] + arguments)
+        let result = try await TestGitRepository.run(arguments: ["-C", dir.path] + arguments)
         try #require(result.exitCode == 0, "git \(arguments.joined(separator: " ")) failed: \(result.stderr)")
         return result
     }
 
-    private func configureIdentity(in repo: URL) async throws {
-        try await git(["config", "user.email", "test@example.com"], in: repo)
-        try await git(["config", "user.name", "Test"], in: repo)
-        try await git(["config", "commit.gpgsign", "false"], in: repo)
-    }
+
 
     private func headOID(in repo: URL) async throws -> String {
         let result = try await git(["rev-parse", "HEAD"], in: repo)
@@ -46,33 +42,7 @@ import Testing
     private func withSharedRemote(
         _ body: (_ remote: URL, _ ours: URL, _ theirs: URL, _ client: GitClient) async throws -> Void
     ) async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repodeck-sync-test-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let seed = root.appendingPathComponent("seed", isDirectory: true)
-        let remote = root.appendingPathComponent("remote.git", isDirectory: true)
-        let ours = root.appendingPathComponent("ours", isDirectory: true)
-        let theirs = root.appendingPathComponent("theirs", isDirectory: true)
-
-        try FileManager.default.createDirectory(at: seed, withIntermediateDirectories: true)
-        try await git(["init", "-b", "main"], in: seed)
-        try await configureIdentity(in: seed)
-        try "base\n".write(to: seed.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
-        try await git(["add", "-A"], in: seed)
-        try await git(["commit", "-m", "chore: base"], in: seed)
-
-        let cloneRemote = try await ProcessRunner.run(arguments: ["clone", "--bare", seed.path, remote.path])
-        try #require(cloneRemote.exitCode == 0, "git clone failed: \(cloneRemote.stderr)")
-        let cloneOurs = try await ProcessRunner.run(arguments: ["clone", remote.path, ours.path])
-        try #require(cloneOurs.exitCode == 0, "git clone failed: \(cloneOurs.stderr)")
-        let cloneTheirs = try await ProcessRunner.run(arguments: ["clone", remote.path, theirs.path])
-        try #require(cloneTheirs.exitCode == 0, "git clone failed: \(cloneTheirs.stderr)")
-        try await configureIdentity(in: ours)
-        try await configureIdentity(in: theirs)
-
-        try await body(remote, ours, theirs, GitClient())
+        try await TestGitRepository.withSharedRemote(body)
     }
 
     // MARK: 1. Remote not ahead: plain push, no rebase

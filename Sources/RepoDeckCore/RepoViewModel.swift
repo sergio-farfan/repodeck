@@ -6,23 +6,23 @@ import RepoDeckKit
 /// the pre-operation `UndoSnapshot` plus the HEAD the operation landed on
 /// (`postOpHead`), so `undoLastSync()` can guard against the repo having
 /// moved on again before restoring.
-struct UndoRecord {
-    let snapshot: UndoSnapshot
-    let postOpHead: String
+public struct UndoRecord {
+    public let snapshot: UndoSnapshot
+    public let postOpHead: String
     /// e.g. "pull" / "auto-rebase push" — used in the Undo button's label.
-    let description: String
+    public let description: String
 }
 
 /// What `showDiff(_:)` is currently (or was last) loading a diff for; a
 /// non-nil value drives the `.inspector` open via `isDiffPresented`.
-enum DiffTarget: Equatable {
+public enum DiffTarget: Equatable {
     case workingFile(FileChange)   // area decides staged/unstaged/untracked
     case commit(Commit)
 }
 
 /// Which direction (if any) a per-hunk button in `DiffView` should offer,
 /// driven by `RepoViewModel.diffHunkAction`.
-enum HunkAction {
+public enum HunkAction {
     case stage
     case unstage
 }
@@ -31,66 +31,74 @@ enum HunkAction {
 /// coalesced refresh that keeps it current.
 @MainActor
 @Observable
-final class RepoViewModel: @MainActor Identifiable {
-    let repo: Repo
-    let client: GitClient
+public final class RepoViewModel: @MainActor Identifiable {
+    public let repo: Repo
+    public var client: GitClient
+    @ObservationIgnored private let clock: @Sendable () -> Date
+    @ObservationIgnored private let reviewLoader: (@Sendable (String, URL, String) async throws -> PullRequestInfo?)?
+    public private(set) var context: RepositoryContext?
+    public private(set) var operationState: RepositoryOperationState = .normal
+    public var selectedSection: RepositorySection = .changes
+    public let workspace = RepositoryWorkspaceModel()
+    public var refreshRevision: Int = 0
+    public var hostingError: String?
 
-    var status: RepoStatus?
-    var statusError: String?
-    var isMissing = false
+    public var status: RepoStatus?
+    public var statusError: String?
+    public var isMissing = false
     /// Draft commit message bound to `CommitBoxView`'s text field.
-    var commitMessage: String = ""
+    public var commitMessage: String = ""
     /// Populated by `refreshLog()`; rendered by `HistoryListView`.
-    var commits: [Commit] = []
+    public var commits: [Commit] = []
     /// Populated by `refreshStashes()`; rendered by `StashSection` at the
     /// bottom of `ChangesListView`.
-    var stashes: [StashEntry] = []
+    public var stashes: [StashEntry] = []
     /// Effective git identity shown by the sidebar footer. Passive like
     /// `refreshStashes`: stale beats blank.
-    var gitIdentity: GitIdentity?
+    public var gitIdentity: GitIdentity?
     /// Free-text history search bound to `HistoryListView`'s search field.
     /// Trimmed empty (the default) means "no filter" — `refreshLog()` falls
     /// back to the full `client.log(in:)`.
-    var historyQuery: String = ""
+    public var historyQuery: String = ""
     /// Which axis `historyQuery` is matched against.
-    var historyField: HistorySearchField = .message
+    public var historyField: HistorySearchField = .message
     /// True while a stage/unstage/commit/sync action is running; `refreshStatus`
     /// never touches this — refresh is a passive, always-allowed operation.
-    var isBusy = false
+    public var isBusy = false
     /// Set by a failed stage/unstage/commit/sync action; cleared on the next
     /// successful action. Rendered by `ErrorBanner` in `RepoDetailView`.
-    var actionError: GitError?
+    public var actionError: GitError?
     /// Per-repo policy seeded from `AppModel.settings(for:)` (the
     /// persisted source of truth, via `repoSettingsByID`): when true,
     /// `push()` recovers from a non-fast-forward rejection by rebasing onto
     /// upstream and retrying once.
-    var autoRebaseOnRejectedPush = false
+    public var autoRebaseOnRejectedPush = false
     /// Info-level counterpart to `actionError`: set when an action succeeded
     /// but did something worth surfacing (an auto-rebase before push).
     /// Cleared at the start of the next action and on manual dismiss.
     /// Rendered by `NoticeBanner` in `RepoDetailView`.
-    var actionNotice: String?
+    public var actionNotice: String?
     /// One-level undo for the last `pull()` or auto-rebase `push()`, if
     /// its snapshot is still live (see `pull()`/`push()` for when it's
     /// written vs. discarded as noise). `undoLastSync()` consumes and
     /// clears it on success; a later sync operation simply replaces it —
     /// `writeUndoSnapshot`'s own pruning handles the superseded ref.
     /// Rendered as an Undo button by `SyncControlsView` whenever non-nil.
-    var undoRecord: UndoRecord?
+    public var undoRecord: UndoRecord?
     /// Set by a failed `autoFetch()`; cleared on the next successful one.
     /// Surfaced nowhere yet — kept for debugging and a future indicator.
-    var lastAutoFetchError: String?
+    public var lastAutoFetchError: String?
     /// The current branch's open PR + CI rollup, via `gh`. Populated by
     /// `refreshPRInfo(using:)`; nil means "nothing to show" whether that's
     /// because gh is unavailable, there's no open PR, or the last refresh
     /// failed — this is a read-only, entirely optional feature, so every
     /// one of those cases renders identically (no badge). Rendered as a
     /// `PRBadgeView` by `SyncControlsView` only when non-nil.
-    var prInfo: PullRequestInfo?
+    public var prInfo: PullRequestInfo?
     /// When `prInfo` was last (successfully or unsuccessfully) refreshed —
     /// the TTL clock `refreshPRInfo(using:)` checks before calling `gh`
     /// again.
-    var prInfoFetchedAt: Date?
+    public var prInfoFetchedAt: Date?
     /// The branch `prInfo`/`prInfoFetchedAt` correspond to. The TTL only
     /// applies while the branch is unchanged: a branch switch (external
     /// `git checkout`, etc.) makes any cached `prInfo` *wrong*, not merely
@@ -103,23 +111,23 @@ final class RepoViewModel: @MainActor Identifiable {
     /// The file or commit `showDiff(_:)` is loading/loaded a diff for;
     /// non-nil drives the read-only diff `.inspector` open on
     /// `RepoDetailView` via `isDiffPresented`. Set to nil to dismiss.
-    var diffTarget: DiffTarget?
+    public var diffTarget: DiffTarget?
     /// Rendered result of the most recent `showDiff(_:)` call; consumed by
     /// `DiffView`.
-    var diffFiles: [FileDiff] = []
+    public var diffFiles: [FileDiff] = []
     /// True while `showDiff(_:)`'s git call is in flight.
-    var isLoadingDiff = false
+    public var isLoadingDiff = false
     /// Set by a failed `showDiff(_:)`; shown inline inside the inspector —
     /// deliberately NOT `actionError`, since a diff load must never disable
     /// the git action buttons or paint `RepoDetailView`'s error banner.
-    var diffError: String?
+    public var diffError: String?
 
     /// Binding source for `.inspector(isPresented:)` on `RepoDetailView`:
     /// true whenever `diffTarget` is set. The setter backs the inspector's
     /// own dismiss chrome (its close button/swipe) — SwiftUI writes `false`
     /// there, which this turns into clearing `diffTarget`; it never writes
     /// `true` itself (that only happens via `showDiff(_:)`).
-    var isDiffPresented: Bool {
+    public var isDiffPresented: Bool {
         get { diffTarget != nil }
         set { if !newValue { diffTarget = nil } }
     }
@@ -131,7 +139,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// and untracked/unmerged have no hunks worth a button (untracked stages
     /// whole-file via the existing Changes-list control; unmerged shows the
     /// resolve-conflict message instead of a diff).
-    var diffHunkAction: HunkAction? {
+    public var diffHunkAction: HunkAction? {
         guard case let .workingFile(change) = diffTarget else { return nil }
         switch change.area {
         case .unstaged: return .stage
@@ -145,22 +153,22 @@ final class RepoViewModel: @MainActor Identifiable {
     /// is shown for this repo. Toggled by `SyncControlsView`'s toolbar button
     /// and set directly by the sidebar's "Open Command Runner" context-menu
     /// item.
-    var isCommandPaneVisible = false
+    public var isCommandPaneVisible = false
     /// Accumulated, ANSI-stripped runner output: each command is echoed as
     /// `"$ <cmd>"`, followed by its interleaved stdout/stderr, followed by
     /// `"[exited N]"` when it exits non-zero (or `"[failed to run: ...]"` if
     /// the shell itself couldn't be launched). Capped at
     /// `Self.commandOutputCap` characters — see `appendOutput(_:)`.
-    private(set) var commandOutput: String = ""
+    public private(set) var commandOutput: String = ""
     /// Bound to `CommandRunnerView`'s input field.
-    var commandInput: String = ""
+    public var commandInput: String = ""
     /// True while `runCommand()`'s child process is running. Deliberately
     /// separate from `isBusy` — see `runCommand()`.
-    private(set) var isRunningCommand = false
+    public private(set) var isRunningCommand = false
     /// Commands previously run, most-recent last. `CommandRunnerView` cycles
     /// `commandInput` through this on up/down arrow; the cursor into it is
     /// kept as `@State` in that view, not here.
-    private(set) var commandHistory: [String] = []
+    public private(set) var commandHistory: [String] = []
     /// The task consuming `runCommand()`'s `ProcessRunner.runStreaming`
     /// stream, so `cancelCommand()` has something to cancel — cancelling it
     /// SIGTERMs the child (see `ProcessRunner.runStreaming`).
@@ -182,7 +190,9 @@ final class RepoViewModel: @MainActor Identifiable {
     /// `isBusy`/`performAction`: a slow or failed `gh` call must never
     /// disable the git action buttons or paint `actionError`'s banner for
     /// what is an entirely optional, best-effort integration.
-    private var isRefreshingPR = false
+    private var prRefreshTask: Task<Void, Never>?
+    private var prRequestedBranch: String?
+    private var prRefreshGeneration = 0
     /// How long a successful-or-not `prInfo` fetch is considered fresh
     /// before `refreshPRInfo(using:)` will call `gh` again (unless `force`).
     private static let prInfoTTL: TimeInterval = 300
@@ -208,20 +218,37 @@ final class RepoViewModel: @MainActor Identifiable {
     /// clobber `diffFiles` after a newer load for B already started.
     private var diffGeneration = 0
 
-    var id: String { repo.id }
+    public var id: String { repo.id }
 
     /// True when `status` has at least one change staged for commit.
-    var hasStagedChanges: Bool { status?.changes.contains { $0.area == .staged } ?? false }
+    public var hasStagedChanges: Bool { status?.changes.contains { $0.area == .staged } ?? false }
 
-    init(repo: Repo, client: GitClient) {
+    public init(repo: Repo, client: GitClient, clock: @escaping @Sendable () -> Date = { Date() },
+                reviewLoader: (@Sendable (String, URL, String) async throws -> PullRequestInfo?)? = nil) {
+        self.clock = clock
+        self.reviewLoader = reviewLoader
         self.repo = repo
         self.client = client
+    }
+
+    public func refreshContext() async {
+        context = try? await RepositoryContext.resolve(in: repo.path, gitPath: client.gitPath)
+        operationState = context.map { RepositoryOperationState.read(in: $0) } ?? .normal
+    }
+
+    public func refreshForExternalChange() async {
+        await refreshStatus()
+        await refreshContext()
+        await refreshLog()
+        await refreshStashes()
+        if let target = diffTarget { await showDiff(target) }
+        refreshRevision += 1
     }
 
     /// Refreshes `status` from disk. Safe to call from multiple call sites
     /// (rescan, watcher, manual refresh) without racing: if a refresh is
     /// already running, this marks one more trailing refresh and returns.
-    func refreshStatus() async {
+    public func refreshStatus() async {
         if refreshInFlight {
             refreshQueued = true
             return
@@ -253,18 +280,20 @@ final class RepoViewModel: @MainActor Identifiable {
 
     /// Stages a single change. For renames/copies, `change.path` (the new
     /// path) alone is sufficient — `git add -- <newPath>` stages the pair.
-    func stage(_ change: FileChange) async {
-        await performAction { try await client.stage([change.path], in: repo.path) }
+    public func stage(_ change: FileChange) async {
+        await performAction(allowInProgress: true) { try await client.stage([change.path], in: repo.path) }
     }
 
     /// Unstages a single change.
-    func unstage(_ change: FileChange) async {
-        await performAction { try await client.unstage([change.path], in: repo.path) }
+    public func unstage(_ change: FileChange) async {
+        var paths = [change.path]
+        if change.statusLetter == "R", let original = change.originalPath { paths.append(original) }
+        await performAction(allowInProgress: true) { try await client.unstage(paths, in: repo.path) }
     }
 
     /// Stages everything, tracked and untracked (`git add -A`).
-    func stageAll() async {
-        await performAction { try await client.stageAll(in: repo.path) }
+    public func stageAll() async {
+        await performAction(allowInProgress: true) { try await client.stageAll(in: repo.path) }
     }
 
     /// Refreshes `commits` from `git log`, or `git log`'s search-filtered
@@ -285,7 +314,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// or `actionError`. Whichever request is newest when its await
     /// resolves wins; an older, slower one is silently dropped no matter
     /// which one's git process happens to finish last.
-    func refreshLog() async {
+    public func refreshLog() async {
         historyGeneration += 1
         let generation = historyGeneration
         do {
@@ -321,7 +350,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// stale list beats a blank one, so a failure just leaves `stashes`
     /// untouched. Called from `RepoDetailView.task(id:)` alongside
     /// `refreshLog()`, and at the tail of every stash mutation below.
-    func refreshStashes() async {
+    public func refreshStashes() async {
         stashes = (try? await client.stashList(in: repo.path)) ?? stashes
     }
 
@@ -329,7 +358,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// Passive like `refreshStashes`: no `isBusy`, no `actionError` banner —
     /// a stale identity beats a blank one, so a failure leaves it untouched.
     /// Called from `SidebarIdentityFooter.task(id:)` on selection change.
-    func refreshIdentity() async {
+    public func refreshIdentity() async {
         gitIdentity = (try? await client.configuredIdentity(in: repo.path)) ?? gitIdentity
     }
 
@@ -357,7 +386,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// what was requested; otherwise a newer request has already superseded
     /// it and this one's result is silently dropped, however late it
     /// resolves.
-    func showDiff(_ target: DiffTarget) async {
+    public func showDiff(_ target: DiffTarget) async {
         diffGeneration += 1
         let generation = diffGeneration
         diffTarget = target
@@ -402,9 +431,10 @@ final class RepoViewModel: @MainActor Identifiable {
     /// reloaded for the same target so the staged hunk disappears from the
     /// unstaged diff (a now-empty diff shows the empty state) while any
     /// other hunks in the file stay put.
-    func stageHunk(_ hunk: Hunk, in file: FileDiff) async {
-        let patch = PatchBuilder.patch(for: hunk, in: file, reverse: false)
-        await performAction {
+    public func stageHunk(_ hunk: Hunk, in file: FileDiff) async {
+        await performAction(allowInProgress: true) {
+            try await self.validateDisplayedHunk(hunk, file: file, staged: false)
+            let patch = try PatchBuilder.checkedPatch(for: hunk, in: file, reverse: false)
             try await self.client.applyPatch(patch, cached: true, reverse: false, in: self.repo.path)
         }
         if let target = diffTarget {
@@ -423,14 +453,28 @@ final class RepoViewModel: @MainActor Identifiable {
     /// with `git apply --reverse` is a double reversal that `git apply`
     /// rejects (verified against real git; see the fix-forward tests' doc
     /// comment). Same `performAction` + diff-reload shape as `stageHunk`.
-    func unstageHunk(_ hunk: Hunk, in file: FileDiff) async {
-        let patch = PatchBuilder.patch(for: hunk, in: file, reverse: true)
-        await performAction {
+    public func unstageHunk(_ hunk: Hunk, in file: FileDiff) async {
+        await performAction(allowInProgress: true) {
+            try await self.validateDisplayedHunk(hunk, file: file, staged: true)
+            let patch = try PatchBuilder.checkedPatch(for: hunk, in: file, reverse: true)
             try await self.client.applyPatch(patch, cached: true, reverse: false, in: self.repo.path)
         }
         if let target = diffTarget {
             await showDiff(target)
         }
+    }
+
+    private func validateDisplayedHunk(_ hunk: Hunk, file: FileDiff, staged: Bool) async throws {
+        let current = try await client.diff(path: file.displayPath, staged: staged, in: repo.path)
+        guard file.hunks.contains(hunk), current == file else {
+            throw GitError(command: "git apply", exitCode: -1,
+                           stderr: "This diff changed on disk. Review the refreshed diff before applying a hunk.")
+        }
+    }
+
+    public var operationIdentity: RepositoryOperationIdentity {
+        RepositoryOperationIdentity(context: context, branch: status?.branch, oid: status?.oid,
+                                    operationFiles: context.map { RepositoryOperationState.fingerprint(in: $0) })
     }
 
     /// Refreshes `prInfo` from `gh pr list` for the current branch. Passive
@@ -447,62 +491,50 @@ final class RepoViewModel: @MainActor Identifiable {
     /// is never left showing. No branch (`status?.branch` nil — e.g.
     /// detached HEAD, or `status` itself not yet loaded) clears everything
     /// and returns without touching `gh`.
-    func refreshPRInfo(using gh: GhClient, force: Bool = false) async {
-        guard let branch = status?.branch else {
+    public func refreshPRInfo(using gh: GhClient, force: Bool = false) async {
+        guard let branch = status?.branch, branch != "(detached)" else {
+            prRefreshTask?.cancel()
+            prRefreshTask = nil
+            prRequestedBranch = nil
+            prRefreshGeneration += 1
             prInfo = nil
             prInfoBranch = nil
+            prInfoFetchedAt = nil
             return
         }
-        // A branch switch invalidates the cached PR outright — clear it now
-        // (not just after the awaited fetch) so a stale/wrong badge never
-        // lingers, and never honor the TTL across a branch change.
-        let branchChanged = branch != prInfoBranch
-        if branchChanged {
-            prInfo = nil
-            prInfoBranch = nil
-        }
-        guard !isRefreshingPR else { return }
-        if !force, !branchChanged, let prInfoFetchedAt,
-           Date().timeIntervalSince(prInfoFetchedAt) < Self.prInfoTTL {
-            return
-        }
-        isRefreshingPR = true
-        defer { isRefreshingPR = false }
-        // Re-fetch until the branch we fetched for is still the current one.
-        // The in-flight guard above drops concurrent callers, so if a
-        // checkout lands mid-fetch we must pick up the new branch here — else
-        // the dropped call for the new branch never runs and, worse, this
-        // one would stamp the old branch as freshly-cached, leaving the new
-        // branch's badge stuck blank. Each iteration is a real (capped,
-        // timed-out) gh call, so this settles in practice rather than spins.
-        var target = branch
-        while true {
-            let fetched = try? await gh.pullRequest(forBranch: target, in: repo.path)
-            // `ProcessRunner` is cancellation-aware (SIGTERMs the child): a
-            // `.task` cancellation (branch change / repo switch mid-fetch)
-            // surfaces here as `gh.pullRequest` throwing, `try?` collapsing
-            // it to `fetched = nil`. Bail before any state write — stamping
-            // `prInfoFetchedAt` on a cancelled fetch would nil-cache a WRONG
-            // empty result for the TTL, leaving prior (still-valid) state
-            // clobbered until the next branch/repo change forces a refetch.
-            if Task.isCancelled { return }
-            guard let current = status?.branch else {
-                // Branch became indeterminate (detached HEAD / status cleared)
-                // while fetching — nothing valid to show.
-                prInfo = nil
-                prInfoBranch = nil
-                prInfoFetchedAt = nil
-                return
+        if !force, branch == prInfoBranch, let date = prInfoFetchedAt,
+           clock().timeIntervalSince(date) < Self.prInfoTTL { return }
+        if !force, prRequestedBranch == branch, let task = prRefreshTask, !task.isCancelled { await task.value; return }
+        prRefreshTask?.cancel()
+        prRefreshGeneration += 1
+        let generation = prRefreshGeneration
+        prRequestedBranch = branch
+        if branch != prInfoBranch { prInfo = nil }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == self.prRefreshGeneration {
+                    self.prRequestedBranch = nil
+                    self.prRefreshTask = nil
+                }
             }
-            if current != target {
-                target = current
-                continue
+            do {
+                let result: PullRequestInfo?
+                if let loader = self.reviewLoader { result = try await loader(branch, self.repo.path, self.client.gitPath) }
+                else { result = try await gh.pullRequest(forBranch: branch, in: self.repo.path, gitPath: self.client.gitPath) }
+                guard !Task.isCancelled, generation == self.prRefreshGeneration,
+                      self.status?.branch == branch else { return }
+                self.prInfo = result
+                self.prInfoBranch = branch
+                self.prInfoFetchedAt = self.clock()
+                self.hostingError = nil
+            } catch {
+                guard !Task.isCancelled, generation == self.prRefreshGeneration else { return }
+                self.hostingError = error.localizedDescription
             }
-            prInfo = fetched ?? nil
-            prInfoBranch = target
-            prInfoFetchedAt = Date()
-            return
         }
+        prRefreshTask = task
+        await task.value
     }
 
     /// Debounces `historyQuery` edits: cancels any prior pending search in
@@ -516,7 +548,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// counter (`historyGeneration`), which both this method and
     /// `historyFieldChanged()` funnel through — see `refreshLog()` for how
     /// that guard works.
-    func scheduleHistorySearch() {
+    public func scheduleHistorySearch() {
         historySearchTask?.cancel()
         historySearchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(300))
@@ -532,7 +564,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// both left running untracked — then runs the refresh with no debounce
     /// delay. `refreshLog()`'s generation counter is the final backstop if
     /// the cancelled task's git subprocess still completes.
-    func historyFieldChanged() {
+    public func historyFieldChanged() {
         historySearchTask?.cancel()
         historySearchTask = Task { [weak self] in
             await self?.refreshLog()
@@ -544,32 +576,18 @@ final class RepoViewModel: @MainActor Identifiable {
     /// action is already running. On success, clears the draft message and
     /// refreshes both status and log so staged changes and the new commit
     /// show up immediately.
-    func commit() async {
-        let trimmedMessage = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedMessage.isEmpty, hasStagedChanges, !isBusy else { return }
-        isBusy = true
-        defer { isBusy = false }
-        actionNotice = nil
-        do {
-            try await client.commit(message: trimmedMessage, in: repo.path)
-            actionError = nil
-            commitMessage = ""
-            // A commit moves HEAD, so any pending pull/auto-rebase-push
-            // undo record is now stale — its `expectedHead` guard would
-            // fire on every future click. Clear it here (not just on the
-            // next sync operation's own overwrite) so the Undo button
-            // doesn't linger uselessly after the common pull-then-commit
-            // sequence.
-            if let record = undoRecord {
-                await client.discardUndoSnapshot(record.snapshot, in: repo.path)
-                undoRecord = nil
+    @discardableResult
+    public func commit() async -> OperationResult {
+        let submittedDraft = commitMessage
+        let trimmed = submittedDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, hasStagedChanges else { return .skipped("Nothing staged or no commit message") }
+        return await performAction(refreshingLog: true) {
+            try await self.client.commit(message: trimmed, in: self.repo.path)
+            if self.commitMessage == submittedDraft { self.commitMessage = "" }
+            if let record = self.undoRecord {
+                await self.client.discardUndoSnapshot(record.snapshot, in: self.repo.path)
+                self.undoRecord = nil
             }
-            await refreshStatus()
-            await refreshLog()
-        } catch let error as GitError {
-            actionError = error
-        } catch {
-            actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
         }
     }
 
@@ -579,7 +597,8 @@ final class RepoViewModel: @MainActor Identifiable {
     /// pull turned out to be a no-op (HEAD didn't move), the snapshot is
     /// noise and is discarded immediately rather than left around as a
     /// dead undo target.
-    func pull() async {
+    @discardableResult
+    public func pull() async -> OperationResult {
         await performAction(refreshingLog: true) {
             let snapshot = try await self.client.writeUndoSnapshot(in: self.repo.path)
             // `writeUndoSnapshot` prunes any prior undo ref, so a record from
@@ -616,7 +635,7 @@ final class RepoViewModel: @MainActor Identifiable {
     /// state (new commits landed) or turn a fresh push into a PR's first
     /// CI run, so the 5-minute TTL is bypassed here. Callers pass nil when
     /// `AppModel.isGhAvailable` is false, which skips the refresh entirely.
-    func push(using gh: GhClient? = nil) async {
+    public func push(using gh: GhClient? = nil) async {
         if autoRebaseOnRejectedPush {
             // `refreshingStashes: true` because an autostash-pop conflict
             // during `pull --rebase --autostash` leaves a real stash entry
@@ -651,9 +670,9 @@ final class RepoViewModel: @MainActor Identifiable {
     /// `reset --keep` refusing because the restore would clobber dirty
     /// work), `undoRecord` is left intact and the failure surfaces through
     /// the normal `actionError` path instead.
-    func undoLastSync() async {
+    public func undoLastSync() async {
         guard let record = undoRecord else { return }
-        await performAction {
+        await performAction(refreshingLog: true) {
             do {
                 try await self.client.restoreUndoSnapshot(
                     record.snapshot, expectedHead: record.postOpHead, in: self.repo.path
@@ -674,7 +693,8 @@ final class RepoViewModel: @MainActor Identifiable {
     }
 
     /// Fetches from upstream without merging — updates ahead/behind counts.
-    func fetch() async {
+    @discardableResult
+    public func fetch() async -> OperationResult {
         await performAction { try await self.client.fetch(in: self.repo.path) }
     }
 
@@ -683,30 +703,30 @@ final class RepoViewModel: @MainActor Identifiable {
     /// `--include-untracked`. `performAction` already refreshes `status`
     /// afterward; `refreshingStashes` additionally refreshes `stashes` so the
     /// new entry shows up immediately.
-    func stashPush(message: String?, includeUntracked: Bool) async {
+    public func stashPush(message: String?, includeUntracked: Bool) async {
         await performAction(refreshingStashes: true) {
             try await self.client.stashPush(message: message, includeUntracked: includeUntracked, in: self.repo.path)
         }
     }
 
     /// Applies `stash@{index}` without dropping it.
-    func stashApply(_ index: Int) async {
-        await performAction(refreshingStashes: true) { try await self.client.stashApply(index, in: self.repo.path) }
+    public func stashApply(_ entry: StashEntry) async {
+        await performAction(refreshingStashes: true) { try await self.client.stashApply(entry, in: self.repo.path) }
     }
 
     /// Applies `stash@{index}` and drops it on success.
-    func stashPop(_ index: Int) async {
-        await performAction(refreshingStashes: true) { try await self.client.stashPop(index, in: self.repo.path) }
+    public func stashPop(_ entry: StashEntry) async {
+        await performAction(refreshingStashes: true) { try await self.client.stashPop(entry, in: self.repo.path) }
     }
 
     /// Drops `stash@{index}` without applying it. Confirmation lives in the
     /// view (`StashSection`'s `.confirmationDialog`) — this method just does
     /// the drop.
-    func stashDrop(_ index: Int) async {
-        await performAction(refreshingStashes: true) { try await self.client.stashDrop(index, in: self.repo.path) }
+    public func stashDrop(_ entry: StashEntry) async {
+        await performAction(refreshingStashes: true) { try await self.client.stashDrop(entry, in: self.repo.path) }
     }
 
-    func toggleCommandPane() {
+    public func toggleCommandPane() {
         isCommandPaneVisible.toggle()
     }
 
@@ -714,15 +734,13 @@ final class RepoViewModel: @MainActor Identifiable {
     /// repo's directory, streaming its output into `commandOutput`. No-op if
     /// blank or a command is already running.
     ///
-    /// Deliberately NOT routed through `performAction`: this is not a git
-    /// mutation, so a running (or long-lived, or hung) command must never
-    /// disable the git action buttons (`isBusy`) or paint `actionError`'s
-    /// banner — it owns its own `isRunningCommand` state instead, the same
-    /// "own state, passive" shape as `refreshStashes()`/
-    /// `refreshPRInfo(using:)`.
-    func runCommand() {
+    /// Commands can mutate Git or working files. They hold the shared
+    /// repository coordinator and block other actions until process cleanup
+    /// finishes, including after Stop. `isRunningCommand` and command output
+    /// report their progress separately from `performAction`'s error banner.
+    public func runCommand() {
         let cmd = commandInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cmd.isEmpty, !isRunningCommand else { return }
+        guard !cmd.isEmpty, !isRunningCommand, !isBusy else { return }
 
         commandHistory.append(cmd)
         commandInput = ""
@@ -735,12 +753,20 @@ final class RepoViewModel: @MainActor Identifiable {
             defer {
                 self.isRunningCommand = false
                 self.commandTask = nil
+                Task { await self.refreshForExternalChange() }
             }
+            var acquiredKey: String?
+            var streamingProcess: StreamingProcess?
             do {
-                let stream = ProcessRunner.runStreaming(
+                let context = try await RepositoryContext.resolve(in: self.repo.path, gitPath: self.client.gitPath)
+                try await RepositoryMutationCoordinator.shared.acquire(context.commonGitDir.path)
+                acquiredKey = context.commonGitDir.path
+                try Task.checkCancellation()
+                let process = ProcessRunner.startStreaming(
                     shell, arguments: ["-lc", cmd], workingDirectory: self.repo.path, priority: .interactive
                 )
-                for try await event in stream {
+                streamingProcess = process
+                for try await event in process.events {
                     switch event {
                     case .output(_, let text):
                         self.appendOutput(AnsiStripper.strip(text))
@@ -753,11 +779,18 @@ final class RepoViewModel: @MainActor Identifiable {
             } catch {
                 self.appendOutput("[failed to run: \(error)]\n")
             }
+            if let streamingProcess {
+                if Task.isCancelled { streamingProcess.cancel() }
+                // Stream cancellation finishes its iterator before the process
+                // group exits. Keep the repository locked and busy until reaped.
+                await streamingProcess.waitForCompletion()
+            }
+            if let acquiredKey { await RepositoryMutationCoordinator.shared.release(acquiredKey) }
         }
     }
 
     /// Cancels the in-flight command, if any.
-    func cancelCommand() {
+    public func cancelCommand() {
         guard isRunningCommand else { return }
         appendOutput("[stopped]\n")
         commandTask?.cancel()
@@ -783,28 +816,27 @@ final class RepoViewModel: @MainActor Identifiable {
         }
     }
 
-    /// Background fetch on the scheduler's behalf: quietly refreshes remote
-    /// state. Deliberately does NOT use performAction — a failed background
-    /// fetch (offline, VPN down) must not light the error banner on N repos,
-    /// and must not flip isBusy-driven UI. Failures land in
-    /// `lastAutoFetchError` (surfaced nowhere yet; kept for debugging and a
-    /// future indicator).
-    ///
-    /// Deliberately does not set `isBusy` — it must not disable the user's
-    /// buttons; concurrent-user-action safety comes from git's own index
-    /// locking plus `GIT_OPTIONAL_LOCKS=0` on status, and fetch touching
-    /// only remote-tracking refs. The `!isBusy` guard below avoids piling
-    /// onto an in-flight user action; a user action starting DURING an
-    /// auto-fetch is safe for the same reasons.
-    func autoFetch() async {
-        guard !isBusy, !isMissing else { return }
+    /// Background fetch uses the shared repository coordinator and sets
+    /// `isBusy` while it runs, so linked worktrees and user actions cannot
+    /// mutate shared Git metadata concurrently. It uses the background
+    /// subprocess lane and reports failures in `lastAutoFetchError` instead
+    /// of the foreground action banner.
+    public func autoFetch() async {
+        guard !isBusy, !isRunningCommand, !isMissing else { return }
+        isBusy = true
+        defer { isBusy = false }
+        var acquiredKey: String?
         do {
+            let context = try await RepositoryContext.resolve(in: repo.path, gitPath: client.gitPath)
+            try await RepositoryMutationCoordinator.shared.acquire(context.commonGitDir.path)
+            acquiredKey = context.commonGitDir.path
+            try Task.checkCancellation()
             try await client.fetch(in: repo.path, priority: .background)
             lastAutoFetchError = nil
         } catch {
             lastAutoFetchError = error.localizedDescription
-            return
         }
+        if let acquiredKey { await RepositoryMutationCoordinator.shared.release(acquiredKey) }
         await refreshStatus()
     }
 
@@ -816,29 +848,75 @@ final class RepoViewModel: @MainActor Identifiable {
     /// while still `isBusy`, so a follow-up action can't fire against a
     /// stale log/stash list — `stash@{N}` indices in particular shift on
     /// drop/pop, so the list must be back in sync before the guard reopens.
-    private func performAction(
+    @discardableResult
+    public func performAction(
         refreshingLog: Bool = false,
         refreshingStashes: Bool = false,
+        allowInProgress: Bool = false,
+        expectedIdentity: RepositoryOperationIdentity? = nil,
         _ operation: () async throws -> Void
-    ) async {
-        guard !isBusy else { return }
+    ) async -> OperationResult {
+        guard !isBusy, !isRunningCommand else { return .skipped("Repository is busy") }
         isBusy = true
         defer { isBusy = false }
         actionNotice = nil
+        let expected = expectedIdentity ?? operationIdentity
+        let result: OperationResult
+        var acquiredKey: String?
         do {
+            let resolved = try await RepositoryContext.resolve(in: repo.path, gitPath: client.gitPath)
+            context = resolved
+            try await RepositoryMutationCoordinator.shared.acquire(resolved.commonGitDir.path)
+            acquiredKey = resolved.commonGitDir.path
+            try Task.checkCancellation()
+            let currentContext = try await RepositoryContext.resolve(in: repo.path, gitPath: client.gitPath)
+            let currentStatus = try await client.status(in: repo.path)
+            guard currentContext == resolved,
+                  expected.context == nil || expected.context == currentContext,
+                  expected.branch == nil || expected.branch == currentStatus.branch,
+                  expected.oid == nil || expected.oid == currentStatus.oid,
+                  expected.operationFiles == nil || expected.operationFiles == RepositoryOperationState.fingerprint(in: currentContext) else {
+                throw GitError(command: "git", exitCode: -1,
+                               stderr: "The repository or current branch changed. Review the refreshed state before trying again.")
+            }
+            operationState = RepositoryOperationState.read(in: resolved)
+            guard allowInProgress || operationState == .normal else {
+                throw GitError(command: "git", exitCode: -1,
+                               stderr: "\(operationState.label). Resolve, continue, or abort that operation first.")
+            }
             try await operation()
             actionError = nil
+            result = .succeeded
+        } catch is CancellationError {
+            result = .skipped("Cancelled")
         } catch let error as GitError {
             actionError = error
+            result = .failed(error.localizedDescription)
         } catch {
             actionError = GitError(command: "git", exitCode: -1, stderr: error.localizedDescription)
+            result = .failed(error.localizedDescription)
         }
+        if let acquiredKey { await RepositoryMutationCoordinator.shared.release(acquiredKey) }
         await refreshStatus()
-        if refreshingLog {
-            await refreshLog()
-        }
-        if refreshingStashes {
-            await refreshStashes()
-        }
+        await refreshContext()
+        if refreshingLog { await refreshLog() }
+        if refreshingStashes { await refreshStashes() }
+        refreshRevision += 1
+        return result
     }
+}
+
+public struct RepositoryOperationIdentity: Sendable, Equatable {
+    public let context: RepositoryContext?
+    public let branch: String?
+    public let oid: String?
+    public let operationFiles: [String: Data]?
+}
+
+public enum RepositorySection: String, CaseIterable, Sendable {
+    case changes = "Changes"
+    case history = "History"
+    case branches = "Branches & Worktrees"
+    case conflicts = "Conflicts"
+    case reviews = "Reviews"
 }

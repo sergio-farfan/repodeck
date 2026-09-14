@@ -8,7 +8,21 @@ import Testing
 /// `GitClientIntegrationTests`.
 @Suite struct PatchBuilderTests {
     private func file(oldPath: String = "f.txt", newPath: String = "f.txt") -> FileDiff {
-        FileDiff(oldPath: oldPath, newPath: newPath, isBinary: false, hunks: [])
+        FileDiff(oldPath: oldPath, newPath: newPath, isBinary: false, hunks: [],
+                 oldMode: oldPath == "/dev/null" ? nil : "100644",
+                 newMode: newPath == "/dev/null" ? nil : "100644")
+    }
+
+    @Test func missingModeMetadataCannotProduceAnApplicablePatch() throws {
+        let hunk = Hunk(oldStart: 0, oldCount: 0, newStart: 1, newCount: 1,
+                        header: "@@ -0,0 +1 @@",
+                        lines: [DiffLine(kind: .addition, text: "content", oldLine: nil, newLine: 1)])
+        for paths in [("/dev/null", "executable"), ("executable", "/dev/null"), ("executable", "executable")] {
+            let incomplete = FileDiff(oldPath: paths.0, newPath: paths.1, isBinary: false, hunks: [hunk])
+            #expect(!incomplete.canApplyHunks)
+            #expect(throws: GitError.self) { try PatchBuilder.checkedPatch(for: hunk, in: incomplete, reverse: false) }
+            #expect(PatchBuilder.patch(for: hunk, in: incomplete, reverse: true).isEmpty)
+        }
     }
 
     @Test func recomputesHeaderCountsForAMixedHunkRatherThanTrustingTheParsedHunk() {

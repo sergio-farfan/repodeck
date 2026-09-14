@@ -1,3 +1,4 @@
+import RepoDeckCore
 import SwiftUI
 
 /// Horizontal pull/push/fetch bar mounted under the commit box, plus an
@@ -14,28 +15,28 @@ struct SyncControlsView: View {
             } label: {
                 Label("Pull", systemImage: "arrow.down")
             }
-            .disabled(vm.isBusy)
+            .disabled(vm.isBusy || vm.isRunningCommand || vm.operationState != .normal)
 
             Button {
                 Task { await vm.push(using: model.isGhAvailable ? model.gh : nil) }
             } label: {
                 Label("Push", systemImage: "arrow.up")
             }
-            .disabled(vm.isBusy)
+            .disabled(vm.isBusy || vm.isRunningCommand || vm.operationState != .normal)
 
             Button {
                 Task { await vm.fetch() }
             } label: {
                 Label("Fetch", systemImage: "arrow.triangle.2.circlepath")
             }
-            .disabled(vm.isBusy)
+            .disabled(vm.isBusy || vm.isRunningCommand || vm.operationState != .normal)
 
             Button {
                 Task { await vm.stashPush(message: nil, includeUntracked: true) }
             } label: {
                 Label("Stash", systemImage: "tray.and.arrow.down")
             }
-            .disabled(vm.isBusy || (vm.status?.dirtyCount ?? 0) == 0)
+            .disabled(vm.isBusy || vm.isRunningCommand || vm.operationState != .normal || (vm.status?.dirtyCount ?? 0) == 0)
 
             Button {
                 vm.toggleCommandPane()
@@ -55,6 +56,14 @@ struct SyncControlsView: View {
             VStack(alignment: .trailing, spacing: 2) {
                 if let prInfo = vm.prInfo {
                     PRBadgeView(info: prInfo)
+                }
+                if let error = vm.hostingError {
+                    Button("Review connection needs attention") { vm.selectedSection = .reviews }
+                        .font(theme.caption).help(error)
+                }
+                if let error = vm.lastAutoFetchError {
+                    Label("Auto-fetch failed", systemImage: "exclamationmark.triangle")
+                        .font(theme.caption).help(error)
                 }
                 if let record = vm.undoRecord {
                     Button {

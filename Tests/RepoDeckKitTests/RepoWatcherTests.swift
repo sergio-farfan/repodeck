@@ -237,3 +237,61 @@ struct RepoWatcherTests {
         harness.stop()
     }
 }
+
+extension RepoWatcherTests {
+    @Test func knownRepoUnderPrunedAncestorsStillRefreshesTrackedContent() async throws {
+        let harness = try WatchHarness()
+        let repo = try harness.makeRepo("vendor/target/checkout")
+        let nested = repo.appendingPathComponent("target")
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        harness.watcher.setWatched(roots: [harness.root], repoPaths: [repo])
+        harness.startDraining()
+        await harness.settle()
+        try harness.write("source", to: nested.appendingPathComponent("tracked.rs"))
+        let events = await harness.waitUntil(timeout: 5) { $0.contains(.repoChanged(repo)) }
+        #expect(events.contains(.repoChanged(repo)))
+        harness.stop()
+    }
+
+    @Test func externalPrivateAndSharedGitDirectoriesRefreshTheirWorktrees() async throws {
+        let harness = try WatchHarness()
+        let first = try harness.makeRepo("tracked/first")
+        let second = try harness.makeRepo("tracked/second")
+        let common = harness.root.appendingPathComponent("external/vendor/store.git")
+        let firstGit = common.appendingPathComponent("worktrees/first")
+        let secondGit = common.appendingPathComponent("worktrees/second")
+        for directory in [firstGit, secondGit, common.appendingPathComponent("refs/heads")] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        harness.watcher.setWatched(roots: [harness.root.appendingPathComponent("tracked")], repoPaths: [first, second], contexts: [
+            RepositoryContext(worktreeRoot: first, gitDir: firstGit, commonGitDir: common),
+            RepositoryContext(worktreeRoot: second, gitDir: secondGit, commonGitDir: common),
+        ])
+        harness.startDraining()
+        await harness.settle()
+        try harness.write("ref: refs/heads/main", to: firstGit.appendingPathComponent("HEAD"))
+        let firstEvents = await harness.waitUntil(timeout: 5) { $0.contains(.repoChanged(first)) }
+        #expect(firstEvents.contains(.repoChanged(first)))
+        await harness.settle()
+        try harness.write("new oid", to: common.appendingPathComponent("refs/heads/main"))
+        let sharedEvents = await harness.waitUntil(timeout: 5) { $0.contains(.repoChanged(first)) && $0.contains(.repoChanged(second)) }
+        #expect(sharedEvents.contains(.repoChanged(first)))
+        #expect(sharedEvents.contains(.repoChanged(second)))
+        harness.stop()
+    }
+}
+
+extension RepoWatcherTests {
+    @Test func discoveredSiblingOutsideTrackedRootIsWatched() async throws {
+        let harness = try WatchHarness()
+        let main = try harness.makeRepo("tracked/main")
+        let sibling = try harness.makeRepo("outside/sibling")
+        harness.watcher.setWatched(roots: [harness.root.appendingPathComponent("tracked")], repoPaths: [main, sibling])
+        harness.startDraining()
+        await harness.settle()
+        try harness.write("changed", to: sibling.appendingPathComponent("source.swift"))
+        let events = await harness.waitUntil(timeout: 5) { $0.contains(.repoChanged(sibling)) }
+        #expect(events.contains(.repoChanged(sibling)))
+        harness.stop()
+    }
+}

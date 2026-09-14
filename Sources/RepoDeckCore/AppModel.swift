@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Observation
 import RepoDeckKit
@@ -12,7 +11,7 @@ import RepoDeckKit
 /// property's doc comment.
 @MainActor
 @Observable
-final class AppModel {
+public final class AppModel {
     private static let trackedFolderPathsKey = "trackedFolderPaths"
     /// Legacy pinned-repo-IDs key. Read-only from this commit on: it feeds
     /// `RepoSettingsMigration` on first launch after the `repoSettings.v1`
@@ -33,65 +32,72 @@ final class AppModel {
 
     /// Progress for an in-flight bulk sync (`fetchAll`/`pullAll`).
     /// `verb` is a present-participle label for the toolbar, e.g. "Fetching".
-    struct BulkProgress: Equatable {
-        var verb: String
-        var done: Int
-        var total: Int
+    public struct BulkProgress: Equatable {
+        public var verb: String
+        public var done: Int
+        public var total: Int
     }
 
-    var trackedFolders: [URL]
-    var repos: [RepoViewModel] = []
-    var isScanning = false
-    var selectedRepoID: String?
+    public var trackedFolders: [URL]
+    public var repos: [RepoViewModel] = []
+    public var isScanning = false
+    public var selectedRepoID: String?
     /// The repo whose settings sheet is presented; nil = no sheet.
-    var repoSettingsTarget: RepoViewModel?
+    public var repoSettingsTarget: RepoViewModel?
     /// Whether the ⌘K command palette overlay is presented.
-    var isPaletteVisible = false
+    public var isPaletteVisible = false
     /// Consolidated per-repo settings (pin, auto-rebase, auto-fetch
     /// interval, group, hidden), keyed by repo id (i.e. path). Persisted as one
     /// JSON blob under `repoSettingsKey`. `private(set)`: `updateSettings`
     /// is the sole write path, so every write also re-persists and (for
     /// `autoRebaseOnRejectedPush`) re-mirrors onto the live `RepoViewModel`.
-    private(set) var repoSettingsByID: [String: RepoSettings]
-    var filterText: String = ""
+    public private(set) var repoSettingsByID: [String: RepoSettings]
+    public var filterText: String = ""
+    public var attentionFilter: RepositoryAttentionFilter = .all
+    public private(set) var workflowSettings: WorkflowSettings
+    public var settingsError: String?
     /// Whether the `MenuBarExtra` presentation (see `RepoDeckApp`) is shown
     /// alongside the full window. Persisted; default off. The full window
     /// remains primary regardless of this flag — see the brief's YAGNI note.
-    var isMenuBarExtraEnabled: Bool {
+    public var isMenuBarExtraEnabled: Bool {
         didSet {
-            UserDefaults.standard.set(isMenuBarExtraEnabled, forKey: Self.menuBarEnabledKey)
+            preferences.set(isMenuBarExtraEnabled, forKey: Self.menuBarEnabledKey)
         }
     }
     /// Non-nil while `fetchAll`/`pullAll` is running. Also the reentrancy
     /// guard: a bulk op only starts when this is nil, so Fetch All and Pull
     /// All can never overlap, with each other or with themselves.
-    var bulkProgress: BulkProgress?
+    public var bulkProgress: BulkProgress?
     /// Transient failure count from the most recently finished bulk op.
     /// Per-repo errors live in each repo's own `actionError` (surfaced by
     /// that repo's `ErrorBanner` once selected); this is just a toolbar-level
     /// summary the user can dismiss.
-    var bulkSummary: String?
+    public var bulkSummary: String?
 
-    let client = GitClient()
+    public var client: GitClient
+    @ObservationIgnored private let preferences: UserDefaults
+    @ObservationIgnored private let scanner: (@Sendable ([URL]) async -> [Repo])?
+    @ObservationIgnored private let clock: @Sendable () -> Date
+    public func now() -> Date { clock() }
 
     /// The `gh` binary, if found on this machine — nil disables the PR/CI
     /// integration entirely (see `isGhAvailable`). Discovered once at
     /// launch; `gh` isn't expected to appear or disappear mid-session.
-    let gh: GhClient?
+    public var gh: GhClient?
     /// Whether `gh` is both installed AND authenticated. Resolved once, off
     /// the main actor, by a one-shot `gh auth status` kicked off in `init`
     /// (nil `gh` short-circuits to `false` without spawning anything).
     /// Every PR/CI call site — `RepoDetailView.task(id:)` and `push()` —
     /// gates on this rather than re-checking auth per call, per the brief's
     /// "runs once per launch" contract for `isAuthenticated()`.
-    private(set) var isGhAvailable = false
+    public private(set) var isGhAvailable = false
     /// The active `gh` account's login (e.g. "sergiofarfan"), resolved by
     /// the same one-shot auth check in `init` that sets `isGhAvailable`;
     /// nil when `gh` is missing, unauthenticated, or the login can't be
     /// parsed. Rendered by `SidebarIdentityFooter`.
-    private(set) var ghAccountLogin: String?
+    public private(set) var ghAccountLogin: String?
 
-    private let watcher = RepoWatcher()
+    @ObservationIgnored private let watcher: RepoWatcher?
     private var watcherTask: Task<Void, Never>?
     private var lastRescanAt: Date?
     /// Set when a `.possibleNewRepo` event arrives while a rescan is already
@@ -107,23 +113,38 @@ final class AppModel {
 
     private var autoFetchScheduler: AutoFetchScheduler?
 
-    init() {
-        let paths = UserDefaults.standard.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
+    public init(
+        preferences: UserDefaults = .standard,
+        client: GitClient = GitClient(),
+        scanner: (@Sendable ([URL]) async -> [Repo])? = nil,
+        clock: @escaping @Sendable () -> Date = { Date() },
+        watcher: RepoWatcher? = nil,
+        events: AsyncStream<WatchEvent>? = nil,
+        startServices: Bool = true
+    ) {
+        self.preferences = preferences
+        let workflow = preferences.data(forKey: "workflow.v1").flatMap { try? JSONDecoder().decode(WorkflowSettings.self, from: $0) } ?? WorkflowSettings()
+        self.workflowSettings = workflow
+        self.client = workflow.gitPath == GitDefaults.gitPath ? client : GitClient(gitPath: workflow.gitPath)
+        self.scanner = scanner
+        self.clock = clock
+        self.watcher = startServices ? (watcher ?? RepoWatcher()) : watcher
+        let paths = preferences.stringArray(forKey: Self.trackedFolderPathsKey) ?? []
         trackedFolders = paths.map { URL(fileURLWithPath: $0) }
-        isMenuBarExtraEnabled = UserDefaults.standard.bool(forKey: Self.menuBarEnabledKey)
+        isMenuBarExtraEnabled = preferences.bool(forKey: Self.menuBarEnabledKey)
         // Assigned before any other stored property below touches `self`
         // (Swift requires every `let` to be set before `self` escapes) —
         // the auth-check `Task` that uses this value is kicked off later,
         // once every property is initialized.
-        gh = GhClient.discover()
+        gh = workflow.ghPath.isEmpty ? GhClient.discover() : GhClient(ghPath: workflow.ghPath)
 
         // Migration inputs are read unconditionally (cheap, and needed by
         // both the corrupt- and absent-key branches below); the legacy keys
         // themselves are never written again after this point.
-        let legacyPinned = UserDefaults.standard.stringArray(forKey: Self.pinnedRepoIDsKey) ?? []
-        let legacyAutoRebase = UserDefaults.standard.stringArray(forKey: Self.autoRebaseRepoIDsKey) ?? []
+        let legacyPinned = preferences.stringArray(forKey: Self.pinnedRepoIDsKey) ?? []
+        let legacyAutoRebase = preferences.stringArray(forKey: Self.autoRebaseRepoIDsKey) ?? []
 
-        if let data = UserDefaults.standard.data(forKey: Self.repoSettingsKey) {
+        if let data = preferences.data(forKey: Self.repoSettingsKey) {
             if let decoded = try? JSONDecoder().decode([String: RepoSettings].self, from: data) {
                 repoSettingsByID = decoded
             } else {
@@ -147,8 +168,8 @@ final class AppModel {
             saveRepoSettings()
         }
 
+        if let events = events ?? self.watcher?.events {
         watcherTask = Task { [weak self] in
-            guard let events = self?.watcher.events else { return }
             for await event in events {
                 await self?.handle(event)
             }
@@ -157,38 +178,53 @@ final class AppModel {
         // `self` is fully initialized at this point (same constraint the
         // watcher task above already satisfies), so it's safe to hand it to
         // the scheduler here.
-        autoFetchScheduler = AutoFetchScheduler(model: self)
-        autoFetchScheduler?.start()
+        }
+        if startServices {
+            autoFetchScheduler = AutoFetchScheduler(model: self)
+            autoFetchScheduler?.start()
+        }
 
         // One-shot auth check, off the main actor while it awaits the `gh`
         // subprocess. Captures `gh` by value (a `Sendable` struct) rather
         // than reading `self.gh` inside the task, purely for clarity — it
         // reads identically either way since `gh` never changes after init.
-        let gh = gh
-        Task { [weak self] in
-            let authenticated = await gh?.isAuthenticated() ?? false
-            self?.isGhAvailable = authenticated
-            if authenticated {
-                self?.ghAccountLogin = await gh?.activeAccountLogin()
+        isGhAvailable = gh != nil
+        if startServices {
+            Task { [weak self] in
+                self?.ghAccountLogin = await self?.gh?.activeAccountLogin()
             }
         }
+    }
+
+    public func updateWorkflowSettings(_ value: WorkflowSettings) {
+        do {
+            let validated = try value.validated()
+            workflowSettings = validated
+            preferences.set(try JSONEncoder().encode(validated), forKey: "workflow.v1")
+            client = GitClient(gitPath: validated.gitPath)
+            for vm in repos { vm.client = client }
+            gh = validated.ghPath.isEmpty ? GhClient.discover() : GhClient(ghPath: validated.ghPath)
+            isGhAvailable = gh != nil
+            settingsError = nil
+            Task { await refreshAllStatuses() }
+        } catch { settingsError = error.localizedDescription }
     }
 
     isolated deinit {
         autoFetchScheduler?.stop()
         watcherTask?.cancel()
-        watcher.stop()
+        watcher?.stop()
     }
 
     /// Repos matching `filterText` (name or branch, case-insensitive) that are
     /// pinned, alphabetical. Empty when no pinned repo matches.
-    var filteredPinned: [RepoViewModel] {
+    public var filteredPinned: [RepoViewModel] {
         filteredAndSorted(repos.filter { settings(for: $0.id).isPinned })
     }
 
     /// Unpinned repos partitioned by group, ordered by group name; excludes
     /// empty groups (a group exists only through its members).
-    var groupedSections: [(name: String, repos: [RepoViewModel])] {
+    public var groupedSections: [(name: String, repos: [RepoViewModel])] {
         let unpinned = repos.filter { !settings(for: $0.id).isPinned }
         let byGroup = Dictionary(grouping: unpinned.filter { settings(for: $0.id).group != nil },
                                  by: { settings(for: $0.id).group! })
@@ -200,21 +236,25 @@ final class AppModel {
     }
 
     /// Unpinned repos with no group, filtered + sorted (the "Repositories" section).
-    var filteredUngrouped: [RepoViewModel] {
+    public var filteredUngrouped: [RepoViewModel] {
         filteredAndSorted(repos.filter { !settings(for: $0.id).isPinned && settings(for: $0.id).group == nil })
     }
 
     /// The settings for `id`, or all-default values if `id` has no entry
     /// (i.e. it has never had a non-default setting).
-    func settings(for id: String) -> RepoSettings {
-        repoSettingsByID[id] ?? RepoSettings()
+    public func settings(for id: String) -> RepoSettings {
+        if let settings = repoSettingsByID[id] { return settings }
+        // Keep existing path-keyed preferences when a symlinked root becomes canonical.
+        return repoSettingsByID.first {
+            URL(fileURLWithPath: $0.key).resolvingSymlinksInPath().standardizedFileURL.path == id
+        }?.value ?? RepoSettings()
     }
 
     /// The view model `selectedRepoID` points at, or nil. Defensive:
     /// `selectedRepoID` can point at a repo that just disappeared (rescan
     /// pruned it, or `removeRepo` dropped it), so `first(where:)` returning
     /// nil is the "no selection" state, never a crash.
-    var selectedRepo: RepoViewModel? {
+    public var selectedRepo: RepoViewModel? {
         guard let selectedRepoID else { return nil }
         return repos.first { $0.id == selectedRepoID }
     }
@@ -222,7 +262,7 @@ final class AppModel {
     /// Sorted unique non-nil group names currently assigned to any repo.
     /// Backs the settings sheet's Group picker; a later groups feature task
     /// reuses it for the sidebar.
-    var groupNames: [String] {
+    public var groupNames: [String] {
         Array(Set(repoSettingsByID.values.compactMap(\.group))).sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }
@@ -232,7 +272,7 @@ final class AppModel {
     /// out of the dictionary if it round-tripped to all-default, persists,
     /// and mirrors the auto-rebase flag onto the live view model (if any) so
     /// the next `push()` picks it up.
-    func updateSettings(for id: String, _ mutate: (inout RepoSettings) -> Void) {
+    public func updateSettings(for id: String, _ mutate: (inout RepoSettings) -> Void) {
         var s = settings(for: id)
         mutate(&s)
         if s.isDefault { repoSettingsByID.removeValue(forKey: id) } else { repoSettingsByID[id] = s }
@@ -242,29 +282,29 @@ final class AppModel {
 
     private func saveRepoSettings() {
         if let data = try? JSONEncoder().encode(repoSettingsByID) {
-            UserDefaults.standard.set(data, forKey: Self.repoSettingsKey)
+            preferences.set(data, forKey: Self.repoSettingsKey)
         }
     }
 
     /// Toggles `id`'s pinned flag and persists it.
-    func togglePin(_ id: String) {
+    public func togglePin(_ id: String) {
         updateSettings(for: id) { $0.isPinned.toggle() }
     }
 
     /// Toggles `id`'s auto-rebase flag, persists it, and updates the live
     /// view model's flag so the next Push picks it up.
-    func toggleAutoRebase(_ id: String) {
+    public func toggleAutoRebase(_ id: String) {
         updateSettings(for: id) { $0.autoRebaseOnRejectedPush.toggle() }
     }
 
     /// Assigns `id` to group `name` (or ungroups it if `nil`) and persists it.
-    func assignGroup(_ name: String?, to id: String) {
+    public func assignGroup(_ name: String?, to id: String) {
         updateSettings(for: id) { $0.group = name }
     }
 
     /// Drops a repo from the in-memory list only — it returns on the next
     /// rescan if still on disk. `hideRepo` is the persistent wrapper.
-    func removeRepo(_ id: String) {
+    public func removeRepo(_ id: String) {
         repos.removeAll { $0.id == id }
         if selectedRepoID == id {
             selectedRepoID = nil
@@ -276,20 +316,20 @@ final class AppModel {
     /// `removeRepo`, the repo does not return on the next rescan — restore
     /// it via the Folders menu's Hidden Repositories submenu. Never touches
     /// the filesystem.
-    func hideRepo(_ id: String) {
+    public func hideRepo(_ id: String) {
         updateSettings(for: id) { $0.isHidden = true }
         removeRepo(id)
     }
 
     /// Unhides a repo, persists, and kicks off a rescan so it reappears.
-    func unhideRepo(_ id: String) {
+    public func unhideRepo(_ id: String) {
         updateSettings(for: id) { $0.isHidden = false }
         Task { await rescan() }
     }
 
     /// Unhides every hidden repo with a single follow-up rescan (calling
     /// `unhideRepo` in a loop would queue one redundant rescan per repo).
-    func unhideAllRepos() {
+    public func unhideAllRepos() {
         for id in hiddenRepoIDs {
             updateSettings(for: id) { $0.isHidden = false }
         }
@@ -299,7 +339,7 @@ final class AppModel {
     /// The ids of every hidden repo, sorted case-insensitively by display
     /// name (the id's last path component). Backs the Folders menu's
     /// Hidden Repositories submenu.
-    var hiddenRepoIDs: [String] {
+    public var hiddenRepoIDs: [String] {
         repoSettingsByID.filter { $0.value.isHidden }.keys.sorted {
             let a = ($0 as NSString).lastPathComponent
             let b = ($1 as NSString).lastPathComponent
@@ -309,22 +349,22 @@ final class AppModel {
 
     /// Concurrently refreshes every repo's status. `ProcessRunner`'s global
     /// semaphore bounds real subprocess concurrency, so no extra limiter here.
-    func refreshAllStatuses() async {
+    public func refreshAllStatuses() async {
         await withTaskGroup(of: Void.self) { group in
             for vm in repos {
-                group.addTask { await vm.refreshStatus() }
+                group.addTask { await vm.refreshForExternalChange() }
             }
         }
     }
 
     /// Concurrently fetches every non-missing repo. See `runBulk` for the
     /// concurrency, guard, and error-reporting discipline shared with `pullAll`.
-    func fetchAll() async {
+    public func fetchAll() async {
         await runBulk(progressVerb: "Fetching", summaryLabel: "Fetch All") { await $0.fetch() }
     }
 
     /// Concurrently pulls every non-missing repo. See `runBulk`.
-    func pullAll() async {
+    public func pullAll() async {
         await runBulk(progressVerb: "Pulling", summaryLabel: "Pull All") { await $0.pull() }
     }
 
@@ -340,7 +380,7 @@ final class AppModel {
     private func runBulk(
         progressVerb: String,
         summaryLabel: String,
-        action: @escaping @Sendable (RepoViewModel) async -> Void
+        action: @escaping @Sendable (RepoViewModel) async -> OperationResult
     ) async {
         guard bulkProgress == nil else { return }
         let targets = repos.filter { !$0.isMissing }
@@ -349,19 +389,20 @@ final class AppModel {
         bulkSummary = nil
         bulkProgress = BulkProgress(verb: progressVerb, done: 0, total: targets.count)
 
-        await withTaskGroup(of: Void.self) { group in
-            for vm in targets {
-                group.addTask {
-                    await action(vm)
-                    await self.incrementBulkDone()
+        var failures = 0
+        var skipped = 0
+        await withTaskGroup(of: OperationResult.self) { group in
+            for vm in targets { group.addTask { await action(vm) } }
+            for await result in group {
+                incrementBulkDone()
+                switch result {
+                case .succeeded: break
+                case .failed: failures += 1
+                case .skipped: skipped += 1
                 }
             }
         }
-
-        let failureCount = targets.filter { $0.actionError != nil }.count
-        if failureCount > 0 {
-            bulkSummary = "\(summaryLabel): \(failureCount) of \(targets.count) failed — select a repo to see its error"
-        }
+        bulkSummary = "\(summaryLabel): \(targets.count - failures - skipped) succeeded, \(failures) failed, \(skipped) skipped"
         bulkProgress = nil
     }
 
@@ -376,26 +417,18 @@ final class AppModel {
 
     /// Presents an `NSOpenPanel` for choosing one or more folders, appends any
     /// not already tracked, persists, and kicks off a rescan.
-    func addFolders() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = true
-        panel.prompt = "Add"
-
-        guard panel.runModal() == .OK else { return }
-
+    public func addFolders(_ urls: [URL]) {
         let existingPaths = Set(trackedFolders.map { $0.standardizedFileURL.path })
-        let newFolders = panel.urls.filter { !existingPaths.contains($0.standardizedFileURL.path) }
+        let newFolders = urls.filter { !existingPaths.contains($0.standardizedFileURL.path) }
         guard !newFolders.isEmpty else { return }
 
-        trackedFolders.append(contentsOf: newFolders)
+        trackedFolders.append(contentsOf: newFolders.map { $0.resolvingSymlinksInPath().standardizedFileURL })
         saveTrackedFolders()
         Task { await rescan() }
     }
 
     /// Removes a tracked folder, persists, and kicks off a rescan.
-    func removeFolder(_ url: URL) {
+    public func removeFolder(_ url: URL) {
         let targetPath = url.standardizedFileURL.path
         trackedFolders.removeAll { $0.standardizedFileURL.path == targetPath }
         saveTrackedFolders()
@@ -405,61 +438,35 @@ final class AppModel {
     /// Re-scans every tracked folder for git repos and rebuilds `repos`.
     ///
     /// Re-entrant calls are ignored while a scan is already running.
-    func rescan() async {
-        guard !isScanning else { return }
+    public func rescan() async {
+        if isScanning { pendingRescan = true; return }
         isScanning = true
-        lastRescanAt = Date()
         defer { isScanning = false }
-
-        let roots = trackedFolders
-        let discovered = await Task.detached(priority: .userInitiated) { () -> [Repo] in
-            let scanner = RepoScanner()
-            var found: [Repo] = []
-            for root in roots {
-                found.append(contentsOf: scanner.scan(root: root))
+        repeat {
+            pendingRescan = false
+            lastRescanAt = clock()
+            let roots = trackedFolders
+            let discovered: [Repo]
+            if let scanner { discovered = await scanner(roots) }
+            else { discovered = await RepositoryDiscovery.scan(roots: roots, gitPath: client.gitPath) }
+            guard roots == trackedFolders else { pendingRescan = true; continue }
+            var seen = Set<String>()
+            let normalized = discovered.map { Repo(path: $0.path.resolvingSymlinksInPath().standardizedFileURL) }
+            let visible = normalized.filter { seen.insert($0.id).inserted && !settings(for: $0.id).isHidden }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            let existing = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0) })
+            repos = visible.map { repo in
+                let vm = existing[repo.id] ?? RepoViewModel(repo: repo, client: client, clock: clock)
+                vm.autoRebaseOnRejectedPush = settings(for: repo.id).autoRebaseOnRejectedPush
+                return vm
             }
-            return found
-        }.value
-
-        // De-duplicate by id (overlapping roots can rediscover the same repo);
-        // the first occurrence — from the earliest root — wins.
-        var seenIDs = Set<String>()
-        var deduped: [Repo] = []
-        for repo in discovered where seenIDs.insert(repo.id).inserted {
-            deduped.append(repo)
-        }
-        // Hidden repos stay on disk but never reach the dashboard.
-        deduped.removeAll { settings(for: $0.id).isHidden }
-        deduped.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-
-        // Reuse existing view models by id so future per-repo state survives a rescan.
-        let existingByID = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0) })
-        repos = deduped.map { repo in
-            if let existing = existingByID[repo.id] {
-                return existing
+            if let selectedRepoID, !repos.contains(where: { $0.id == selectedRepoID }) { self.selectedRepoID = nil }
+            await withTaskGroup(of: Void.self) { group in
+                for vm in repos { group.addTask { await vm.refreshContext() } }
             }
-            let vm = RepoViewModel(repo: repo, client: client)
-            vm.autoRebaseOnRejectedPush = settings(for: repo.id).autoRebaseOnRejectedPush
-            return vm
-        }
-
-        if let selectedRepoID, !repos.contains(where: { $0.id == selectedRepoID }) {
-            self.selectedRepoID = nil
-        }
-
-        // Re-arm the watcher with the freshly discovered repo set so live
-        // refresh and auto-discovery keep working after every rescan.
-        watcher.setWatched(roots: trackedFolders, repoPaths: repos.map(\.repo.path))
-
-        await refreshAllStatuses()
-
-        // A `.possibleNewRepo` event landed while this rescan owned the
-        // guard (either `isScanning` or the storm window) and was recorded
-        // rather than dropped. Schedule exactly one follow-up rescan so it
-        // isn't lost.
-        if pendingRescan {
-            scheduleFollowUpRescan()
-        }
+            watcher?.setWatched(roots: roots, repoPaths: repos.map(\.repo.path), contexts: repos.compactMap(\.context))
+            await refreshAllStatuses()
+        } while pendingRescan
     }
 
     /// Schedules the single follow-up rescan that consumes `pendingRescan`.
@@ -485,14 +492,15 @@ final class AppModel {
     /// Handles a debounced watcher event. Runs on the main actor: the
     /// consumer `Task` in `init` inherits this actor's isolation, so no
     /// explicit hop is needed here.
-    private func handle(_ event: WatchEvent) async {
+    public func handle(_ event: WatchEvent) async {
         switch event {
         case .repoChanged(let url):
             let target = url.standardizedFileURL.path
             guard let vm = repos.first(where: { $0.repo.path.standardizedFileURL.path == target }) else {
                 return
             }
-            await vm.refreshStatus()
+            await vm.refreshForExternalChange()
+            if selectedRepoID == vm.id, let gh { await vm.refreshPRInfo(using: gh, force: true) }
 
         case .possibleNewRepo:
             // Rather than dropping an event that arrives while a rescan
@@ -506,7 +514,7 @@ final class AppModel {
                 pendingRescan = true
                 return
             }
-            if let lastRescanAt, Date().timeIntervalSince(lastRescanAt) < Self.rescanStormInterval {
+            if let lastRescanAt, clock().timeIntervalSince(lastRescanAt) < Self.rescanStormInterval {
                 pendingRescan = true
                 scheduleFollowUpRescan()
                 return
@@ -517,7 +525,7 @@ final class AppModel {
 
     private func saveTrackedFolders() {
         let paths = trackedFolders.map { $0.path }
-        UserDefaults.standard.set(paths, forKey: Self.trackedFolderPathsKey)
+        preferences.set(paths, forKey: Self.trackedFolderPathsKey)
     }
 
     private func filteredAndSorted(_ list: [RepoViewModel]) -> [RepoViewModel] {
@@ -527,6 +535,14 @@ final class AppModel {
     }
 
     private func matchesFilter(_ vm: RepoViewModel) -> Bool {
+        switch attentionFilter {
+        case .all: break
+        case .changes: guard (vm.status?.dirtyCount ?? 0) > 0 else { return false }
+        case .conflicts: guard vm.status?.changes.contains(where: { $0.area == .unmerged }) == true else { return false }
+        case .ahead: guard (vm.status?.ahead ?? 0) > 0 else { return false }
+        case .behind: guard (vm.status?.behind ?? 0) > 0 else { return false }
+        case .errors: guard vm.actionError != nil || vm.statusError != nil || vm.lastAutoFetchError != nil || vm.hostingError != nil else { return false }
+        }
         guard !filterText.isEmpty else { return true }
         if vm.repo.name.localizedCaseInsensitiveContains(filterText) { return true }
         if let branch = vm.status?.branch, branch.localizedCaseInsensitiveContains(filterText) { return true }

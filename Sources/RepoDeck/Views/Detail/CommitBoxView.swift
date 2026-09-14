@@ -1,3 +1,4 @@
+import RepoDeckCore
 import SwiftUI
 
 /// VS Code-style commit box: a multi-line message field and a prominent

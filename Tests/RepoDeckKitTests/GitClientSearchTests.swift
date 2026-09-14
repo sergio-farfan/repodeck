@@ -15,58 +15,48 @@ import Testing
     /// `GitClientIntegrationTests.withTempRepo`, but commits per-author via
     /// `git commit --author` rather than the shared default identity.
     private func withSearchFixtureRepo(_ body: (URL, GitClient) async throws -> Void) async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repodeck-search-test-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        try await TestGitRepository.withRepository { root, client in
+            // Commit A: "add login", author Alice, touches auth.swift.
+            try "let token = 1".write(
+                to: root.appendingPathComponent("auth.swift"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try await client.stage(["auth.swift"], in: root)
+            _ = try await TestGitRepository.run(arguments: [
+                "-C", root.path, "commit",
+                "--author=Alice <a@x>",
+                "-m", "add login",
+            ])
 
-        _ = try await ProcessRunner.run(arguments: ["init", "-b", "main"], workingDirectory: root)
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.email", "test@example.com"])
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.name", "Test"])
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "commit.gpgsign", "false"])
+            // Commit B: "fix logout bug", author Bob, touches ui.swift.
+            try "class UI {}".write(
+                to: root.appendingPathComponent("ui.swift"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try await client.stage(["ui.swift"], in: root)
+            _ = try await TestGitRepository.run(arguments: [
+                "-C", root.path, "commit",
+                "--author=Bob <b@x>",
+                "-m", "fix logout bug",
+            ])
 
-        let client = GitClient()
+            // Commit C: "update login docs", author Alice, touches README.md.
+            try "# Login docs".write(
+                to: root.appendingPathComponent("README.md"),
+                atomically: true,
+                encoding: .utf8
+            )
+            try await client.stage(["README.md"], in: root)
+            _ = try await TestGitRepository.run(arguments: [
+                "-C", root.path, "commit",
+                "--author=Alice <a@x>",
+                "-m", "update login docs",
+            ])
 
-        // Commit A: "add login", author Alice, touches auth.swift.
-        try "let token = 1".write(
-            to: root.appendingPathComponent("auth.swift"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try await client.stage(["auth.swift"], in: root)
-        _ = try await ProcessRunner.run(arguments: [
-            "-C", root.path, "commit",
-            "--author=Alice <a@x>",
-            "-m", "add login",
-        ])
-
-        // Commit B: "fix logout bug", author Bob, touches ui.swift.
-        try "class UI {}".write(
-            to: root.appendingPathComponent("ui.swift"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try await client.stage(["ui.swift"], in: root)
-        _ = try await ProcessRunner.run(arguments: [
-            "-C", root.path, "commit",
-            "--author=Bob <b@x>",
-            "-m", "fix logout bug",
-        ])
-
-        // Commit C: "update login docs", author Alice, touches README.md.
-        try "# Login docs".write(
-            to: root.appendingPathComponent("README.md"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try await client.stage(["README.md"], in: root)
-        _ = try await ProcessRunner.run(arguments: [
-            "-C", root.path, "commit",
-            "--author=Alice <a@x>",
-            "-m", "update login docs",
-        ])
-
-        try await body(root, client)
+            try await body(root, client)
+        }
     }
 
     // MARK: - .message
@@ -122,18 +112,10 @@ import Testing
     // MARK: - fresh repo, no commits (exit-128 path)
 
     @Test func searchOnFreshRepoWithNoCommitsReturnsEmpty() async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repodeck-search-fresh-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        _ = try await ProcessRunner.run(arguments: ["init", "-b", "main"], workingDirectory: root)
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.email", "test@example.com"])
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.name", "Test"])
-
-        let client = GitClient()
-        let query = HistorySearchQuery(text: "login", field: .message)
-        let commits = try await client.searchLog(query, in: root)
-        #expect(commits.isEmpty)
+        try await TestGitRepository.withRepository { root, client in
+            let query = HistorySearchQuery(text: "login", field: .message)
+            let commits = try await client.searchLog(query, in: root)
+            #expect(commits.isEmpty)
+        }
     }
 }

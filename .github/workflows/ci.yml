@@ -1,0 +1,71 @@
+name: Build and test
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to validate; empty uses the triggering event
+        type: string
+        default: ''
+      release_tag:
+        description: Optional release tag that must still identify ref
+        type: string
+        default: ''
+      skip_universal:
+        description: Skip the universal build when a later release job packages it
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  cancel-in-progress: ${{ inputs.release_tag == '' }}
+jobs:
+  macos:
+    name: macOS (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify pinned release source
+        if: inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_COMMIT: ${{ inputs.ref }}
+        run: Scripts/validate-release-tag.sh "$RELEASE_TAG" "$EXPECTED_COMMIT"
+      - name: Toolchain
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          xcodebuild -version
+          swift --version
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+      - name: Validate packaging scripts
+        run: |
+          for script in Scripts/*.sh Tests/ReleaseScripts/*.sh; do
+            bash -n "$script"
+          done
+          for test_script in Tests/ReleaseScripts/test-*.sh; do
+            "$test_script"
+          done
+      - name: Build and verify universal application
+        if: matrix.arch == 'arm64' && !inputs.skip_universal
+        run: Scripts/bundle.sh

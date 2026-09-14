@@ -1,3 +1,4 @@
+import RepoDeckCore
 import SwiftUI
 
 struct RepoListView: View {
@@ -10,6 +11,13 @@ struct RepoListView: View {
         VStack(spacing: 0) {
             SidebarHeader()
             SidebarFilterField(text: $model.filterText)
+            Picker("Show", selection: $model.attentionFilter) {
+                ForEach(RepositoryAttentionFilter.allCases, id: \.self) { filter in
+                    Text(filter.rawValue).tag(filter)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
             repoList
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { SidebarIdentityFooter() }
