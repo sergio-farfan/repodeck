@@ -178,26 +178,41 @@ public final class RepoWatcher: @unchecked Sendable {
     // MARK: Event handling (queue-confined — called from `callback`)
 
     private func handle(paths: [String]) {
-        guard !stopped else { return }
+        for mapped in map(paths: paths) {
+            schedule(mapped.event, key: mapped.key)
+        }
+    }
+
+    /// Uses the same mapping as the callback without scheduling emissions.
+    /// Exact-path filtering can therefore be checked independently of the
+    /// additional parent-directory events that FSEvents is allowed to deliver.
+    func events(forPaths paths: [String]) -> [WatchEvent] {
+        queue.sync { map(paths: paths).map(\.event) }
+    }
+
+    private func map(paths: [String]) -> [(event: WatchEvent, key: String)] {
+        guard !stopped else { return [] }
+        var mapped: [(event: WatchEvent, key: String)] = []
         for raw in paths {
             let path = Self.normalize(URL(fileURLWithPath: raw))
             let metadata = metadataEntries.filter { Self.path(path, isUnderOrEqualTo: $0.key) }
             if !metadata.isEmpty {
                 guard URL(fileURLWithPath: path).lastPathComponent != "index.lock" else { continue }
-                for entry in metadata { schedule(.repoChanged(entry.repo), key: "R:" + Self.normalize(entry.repo)) }
+                for entry in metadata { mapped.append((.repoChanged(entry.repo), "R:" + Self.normalize(entry.repo))) }
                 continue
             }
 
             if let repo = repoEntries.first(where: { Self.path(path, isUnderOrEqualTo: $0.key) }) {
                 let relative = String(path.dropFirst(repo.key.count))
                 guard !Self.shouldIgnore(relative, forKnownRepo: true) else { continue }
-                schedule(.repoChanged(repo.url), key: "R:" + repo.key)
+                mapped.append((.repoChanged(repo.url), "R:" + repo.key))
             } else if let root = rootEntries.first(where: { Self.path(path, isUnderOrEqualTo: $0.key) }) {
                 let relative = String(path.dropFirst(root.key.count))
                 guard !Self.shouldIgnore(relative) else { continue }
-                schedule(.possibleNewRepo(root.url), key: "N:" + root.key)
+                mapped.append((.possibleNewRepo(root.url), "N:" + root.key))
             }
         }
+        return mapped
     }
 
     /// Trailing debounce: a burst for `key` collapses to one emission ~300 ms

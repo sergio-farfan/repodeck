@@ -146,22 +146,43 @@ struct RepoWatcherTests {
         harness.stop()
     }
 
-    // 3. Ignore filter: creating only .git/index.lock produces NO event within a short window.
-    @Test func indexLockIsIgnored() async throws {
+    // 3. Exact lock paths are ignored. Real FSEvents can also report their
+    // parent directories, so stream-wide silence is not a valid assertion.
+    @Test func indexLockIsIgnored() throws {
         let harness = try WatchHarness()
         let repoA = try harness.makeRepo("repoA")
         harness.watcher.setWatched(roots: [harness.root], repoPaths: [repoA])
-        harness.startDraining()
-        await harness.settle()
+        let locks = [".git/index.lock", ".git/worktrees/linked/index.lock"]
+            .map { repoA.appendingPathComponent($0).path }
+        #expect(harness.watcher.events(forPaths: locks).isEmpty)
+        harness.stop()
+    }
 
-        // Write the lock file directly (not atomically) so no temporary
-        // sibling file — which would NOT be ignored — is created alongside it.
-        let lock = repoA.appendingPathComponent(".git/index.lock")
-        #expect(FileManager.default.createFile(atPath: lock.path, contents: Data("locked".utf8)))
+    @Test func coalescedGitDirectoryAndIndexChangesStillRefreshTheRepo() throws {
+        let harness = try WatchHarness()
+        let repoA = try harness.makeRepo("repoA")
+        harness.watcher.setWatched(roots: [harness.root], repoPaths: [repoA])
+        for path in [repoA, repoA.appendingPathComponent(".git"), repoA.appendingPathComponent(".git/index")] {
+            let paths = [repoA.appendingPathComponent(".git/index.lock").path, path.path]
+            #expect(harness.watcher.events(forPaths: paths) == [.repoChanged(repoA)])
+        }
+        // A tracked file that merely shares the lock's name is still relevant.
+        #expect(harness.watcher.events(forPaths: [repoA.appendingPathComponent("index.lock").path]) == [.repoChanged(repoA)])
+        harness.stop()
+    }
 
-        // Poll for 1.5 s; the array must stay empty.
-        let events = await harness.waitUntil(timeout: 1.5) { !$0.isEmpty }
-        #expect(events.isEmpty)
+    @Test func externalMetadataLockPathsAreIgnoredWithoutHidingParentChanges() throws {
+        let harness = try WatchHarness()
+        let repoA = try harness.makeRepo("repoA")
+        let common = harness.root.appendingPathComponent("external/store.git")
+        let privateGit = common.appendingPathComponent("worktrees/linked")
+        harness.watcher.setWatched(roots: [harness.root], repoPaths: [repoA], contexts: [
+            RepositoryContext(worktreeRoot: repoA, gitDir: privateGit, commonGitDir: common),
+        ])
+        let locks = [common, privateGit].map { $0.appendingPathComponent("index.lock").path }
+        #expect(harness.watcher.events(forPaths: locks).isEmpty)
+        #expect(harness.watcher.events(forPaths: [common.path]) == [.repoChanged(repoA)])
+        #expect(harness.watcher.events(forPaths: [common.appendingPathComponent("index").path]) == [.repoChanged(repoA)])
         harness.stop()
     }
 
