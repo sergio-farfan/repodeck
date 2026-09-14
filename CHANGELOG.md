@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - Beta draft (2026-09-13)
+
+Prepared as a prerelease draft; public distribution is pending the manual release gates below.
+
 ### Added
 
 - Combined Git-client beta: commit graph and pagination, branch/tracking/worktree management, text conflict resolution with separate save/stage actions, and GitHub/GitLab review workspaces.
@@ -136,6 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sidebar filter and pinning.
 - History list.
 
+[Unreleased]: https://github.com/sergio-farfan/repodeck/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/sergio-farfan/repodeck/compare/v1.9.0...v1.10.0
 [1.3.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.3.0
 [1.2.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.2.0
 [1.1.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.1.0

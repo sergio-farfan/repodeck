@@ -16,7 +16,7 @@
 
 Track a few dozen local git repositories and one question gets hard to answer at a glance: which ones have uncommitted work, and which ones are behind their remote and need a pull? Finding out normally means opening each folder, one at a time, just to check. RepoDeck answers it for every tracked repo at once, in a single native window that stays current as files change on disk — no manual refresh, no per-repo client to open.
 
-> **Development checkout:** this branch contains the next release’s reliability, workflow, and hosting changes. These combined changes remain in beta until the automated and manual checks in [TESTING.md](TESTING.md) are complete. Downloaded releases may not contain every feature described here.
+> **1.10.0 beta preparation:** this checkout contains the combined reliability, workflow, and hosting changes. The beta is being prepared as a draft pending the manual checks in [TESTING.md](TESTING.md). The latest public download remains 1.9.0 and does not include every feature described here.
 
 ## Download
 
@@ -46,7 +46,7 @@ Prefer to build it yourself? See [Build from source](#build-from-source).
 - **Stage, commit, pull, push, fetch** — stage or unstage individual files, "Stage All", commit with ⌘⏎, and pull/push/fetch the selected repo from the buttons under the commit box.
 - **Bulk Fetch All / Pull All** — fetch or pull every tracked repo at once, with a toolbar progress readout and explicit success, failure, and skipped counts. Busy repositories are reported as skipped.
 - **Diff view with hunk staging** — right-click a changed file or a commit in History and choose **View Diff**: a unified diff opens in a side inspector with per-file headers (renames as `old → new`), hunk headers, an old/new line-number gutter, and tinted additions and deletions. Binary files are labeled, conflicted files prompt you to resolve first, and very large diffs are capped rather than hanging. Eligible hunks have Stage or Unstage controls. Non-UTF-8 content, unknown or changed modes, symlinks, submodules, and renames require a whole-file operation with a visible explanation. Displayed hunks are revalidated before writing; commit diffs are read-only.
-- **Auto-rebase on rejected push (per repo)** — right-click a repo and enable **Auto-Rebase on Rejected Push**: when a push is rejected because the remote has new commits, RepoDeck runs `git pull --rebase --autostash` and retries the push once, then shows a dismissible notice. A conflicting rebase aborts cleanly back to the pre-rebase state. Off by default for every repo.
+- **Auto-rebase on rejected push (per repo)** — right-click a repo and enable **Auto-Rebase on Rejected Push**: when a push is rejected because the remote has new commits, RepoDeck runs `git pull --rebase --autostash` and retries the push once, then shows a dismissible notice. If the rebase conflicts, RepoDeck attempts to abort it; conflicts or a retained autostash may still require recovery. Off by default for every repo.
 - **Per-repo auto-fetch** — set a fetch interval (5/15/30/60 minutes) per repo in Repository Settings; RepoDeck fetches quietly in the background and keeps ahead/behind counts current. Background fetch failures have a visible status explanation. Fetches use a capped background lane; interactive requests have queue priority, and writes sharing Git metadata are serialized.
 - **Repo groups** — organize repos into named sidebar sections, assigned from Repository Settings or right-click → **Move to Group**. Pinned repos always stay in the Pinned section, so a group's section appears once it has at least one unpinned member.
 - **Command palette** — press ⌘K to jump to any repo or run a common action (Fetch All, Pull All, Refresh Repositories, or the selected repo's Pull/Push/Fetch/Reveal in Finder/Open in Terminal) from the keyboard, with matches ranked prefix > word-boundary > substring.
@@ -90,6 +90,7 @@ Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are o
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.10.0 beta | Draft preparation | Reliability fixes, commit graph, branches/worktrees, conflict resolver, and GitHub/GitLab reviews; public release pending validation |
 | [1.9.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.9.0) | 2026-07-20 | Hide and restore repositories; sidebar/footer refinements |
 | [1.8.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.8.0) | 2026-07-20 | Per-repository identity footer and sidebar restyle |
 | [1.7.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.7.0) | 2026-07-15 | Hunk staging from the diff view — stage or unstage one hunk at a time |

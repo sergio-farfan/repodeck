@@ -40,8 +40,10 @@ The development changes were validated on macOS 27.0 with Xcode 26.6 / Swift 6.3
 
 - The app and libraries build; the universal app contains both arm64 and x86_64 slices and passes ad-hoc signature verification.
 - The final run passed **335 tests across 25 suites on each architecture**: Apple silicon and the compiled Intel test bundle under Rosetta. Xcode's installed SwiftPM helper was ARM-only, so the Intel run used a temporary x86_64 loader calling the standard `Testing.__swiftPMEntryPoint` on the unchanged test bundle. Native Intel CI avoids that local toolchain workaround.
-- Every shell script passed syntax checks, and offline release preflight regressions passed. No release was created or uploaded.
+- Every shell script passed syntax checks, and offline release preflight regressions passed. No release was created or uploaded during this development validation.
 - Visual inspection exercised the dashboard, linked sibling-worktree discovery, and history graph in disposable repositories. After the UI automation connection recovered, native accessibility inspection and screenshots verified basic navigation, the compact Workspace menu, and the history graph at a 900×582 window size. The full keyboard/VoiceOver matrix, appearance settings, and editor/terminal combinations are not certified by this run.
 - No live hosting writes, Developer ID signing, notarization, or clean-machine downloaded-installer verification were performed. Those remain release gates above; hosting tests use isolated transport responses and local Git remotes.
+
+Native GitHub CI also passed **335 tests across 25 suites on each architecture**, along with builds, shell checks, release-script regressions, and a universal app build, for the merged feature source at `cd99330f9be56881b0f94f89501916b3c95d6b62`: [validation run](https://github.com/sergio-farfan/repodeck/actions/runs/34795082178). Version 1.10.0 (build 12) is being prepared as a beta draft; its release notes record the final tagged commit, packaging toolchain, and installer verification results.
 
 See the test runner's reported total rather than a fixed README count as cases are added. The broader workflows remain a development beta until the manual gates pass.

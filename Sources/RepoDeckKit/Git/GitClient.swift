@@ -161,10 +161,10 @@ public struct GitClient: Sendable {
     /// rejection is rethrown unchanged, with no rebase attempted; the
     /// retry's own failure is rethrown unchanged after the rebase has
     /// already completed. If the rebase itself fails (e.g. conflicts), a
-    /// best-effort `git rebase --abort` restores the pre-pull state before
-    /// the pull's error is rethrown, so the repo is never left mid-rebase;
-    /// the abort's own result is ignored because it fails harmlessly when
-    /// the pull never actually started a rebase.
+    /// best-effort `git rebase --abort` attempts to restore the pre-pull
+    /// state before the pull's error is rethrown. Abort can fail, and
+    /// autostash restoration may leave conflicts or a recoverable stash;
+    /// callers must refresh operation state and stashes after failure.
     public func pushWithAutoRebase(in repo: URL) async throws -> PushOutcome {
         do {
             try await runVoid(["push"], in: repo, timeout: Self.syncTimeout)
