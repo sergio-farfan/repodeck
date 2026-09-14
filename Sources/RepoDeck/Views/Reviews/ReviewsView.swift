@@ -40,7 +40,7 @@ struct ReviewsView: View {
             Divider()
             if store.client != nil {
                 HSplitView {
-                    requestList.frame(minWidth: 170, idealWidth: 230)
+                    requestList.frame(minWidth: 170, idealWidth: 230, maxWidth: 280)
                     detailPane.frame(minWidth: 280)
                 }
             } else {
