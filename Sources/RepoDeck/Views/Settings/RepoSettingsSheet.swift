@@ -11,6 +11,7 @@ struct RepoSettingsSheet: View {
     let vm: RepoViewModel
 
     @State private var newGroupName = ""
+    @State private var isIdentityPresented = false
 
     var body: some View {
         Form {
@@ -24,6 +25,12 @@ struct RepoSettingsSheet: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+            }
+
+            Section("Commit Author") {
+                Button("Configure Commit Author…") { isIdentityPresented = true }
+                Text("Set the default author name and email, and check which author Git will use for new commits.")
+                    .font(theme.caption).foregroundStyle(.secondary)
             }
 
             Section("Sync") {
@@ -86,6 +93,7 @@ struct RepoSettingsSheet: View {
         .formStyle(.grouped)
         .frame(width: 500, height: 640)
         .padding(.vertical, 8)
+        .sheet(isPresented: $isIdentityPresented) { GitIdentitySheet(vm: vm) }
     }
 
     private func applicationOverride(_ label: String, keyPath: WritableKeyPath<RepoSettings, String?>) -> some View {

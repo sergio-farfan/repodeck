@@ -42,7 +42,9 @@ struct ConflictWorkspaceView: View {
                 Button("Reload from Disk…") { pendingReloadPath = workspace.selectedConflict }
                     .disabled(vm.isBusy || workspace.isLoadingConflict || workspace.selectedConflict == nil)
             }
-            if let error = workspace.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            if let error = workspace.error {
+                RepositoryFailureBanner(vm: vm, failure: OperationFailure(message: error, command: "Conflict workspace")) { workspace.error = nil }
+            }
             if workspace.conflictChangedExternally {
                 Label("This conflict changed on disk. Your draft is retained. Reload before saving or marking resolved.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)

@@ -1,14 +1,31 @@
 import RepoDeckCore
+import RepoDeckKit
 import SwiftUI
 
-/// Horizontal pull/push/fetch bar mounted under the commit box, plus an
-/// ahead/behind readout for the current upstream.
+/// Adapts sync controls and repository status to the available detail width.
 struct SyncControlsView: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var model
     let vm: RepoViewModel
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                syncButtons.fixedSize()
+                auxiliaryButtons.fixedSize()
+                Spacer(minLength: 8)
+                status
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) { syncButtons; Spacer() }
+                HStack(spacing: 12) { auxiliaryButtons; Spacer() }
+                status.frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+        .padding(10)
+    }
+
+    private var syncButtons: some View {
         HStack(spacing: 12) {
             Button {
                 Task { await vm.pull() }
@@ -31,6 +48,12 @@ struct SyncControlsView: View {
             }
             .disabled(vm.isBusy || vm.isRunningCommand || vm.operationState != .normal)
 
+            if vm.isBusy { ProgressView().controlSize(.small) }
+        }
+    }
+
+    private var auxiliaryButtons: some View {
+        HStack(spacing: 12) {
             Button {
                 Task { await vm.stashPush(message: nil, includeUntracked: true) }
             } label: {
@@ -46,45 +69,44 @@ struct SyncControlsView: View {
             .tint(vm.isCommandPaneVisible ? theme.accent : nil)
             .help("Command Runner")
 
-            if vm.isBusy {
-                ProgressView()
-                    .controlSize(.small)
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                if let prInfo = vm.prInfo {
-                    PRBadgeView(info: prInfo)
-                }
-                if let error = vm.hostingError {
-                    Button("Review connection needs attention") { vm.selectedSection = .reviews }
-                        .font(theme.caption).help(error)
-                }
-                if let error = vm.lastAutoFetchError {
-                    Label("Auto-fetch failed", systemImage: "exclamationmark.triangle")
-                        .font(theme.caption).help(error)
-                }
-                if let record = vm.undoRecord {
-                    Button {
-                        Task { await vm.undoLastSync() }
-                    } label: {
-                        Label("Undo \(record.description)", systemImage: "arrow.uturn.backward")
-                    }
-                    .buttonStyle(.borderless)
-                    .font(theme.caption)
-                    .disabled(vm.isBusy)
-                }
-                if let aheadBehindText {
-                    Text(aheadBehindText)
-                        .font(theme.caption)
-                }
-                Text(vm.status?.upstream ?? "No upstream")
-                    .font(theme.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
-        .padding(10)
+    }
+
+    private var status: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if let prInfo = vm.prInfo {
+                PRBadgeView(info: prInfo)
+            }
+            if let error = vm.hostingError {
+                Button("Review connection needs attention") { vm.selectedSection = .reviews }
+                    .font(theme.caption).help(error)
+            }
+            if let error = vm.lastAutoFetchError {
+                Button {
+                    vm.actionError = GitError(command: "Automatic fetch", exitCode: -1, stderr: error)
+                } label: {
+                    Label("Auto-fetch failed — Details", systemImage: "exclamationmark.triangle")
+                }.font(theme.caption)
+            }
+            if let record = vm.undoRecord {
+                Button {
+                    Task { await vm.undoLastSync() }
+                } label: {
+                    Label("Undo \(record.description)", systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(.borderless)
+                .font(theme.caption)
+                .disabled(vm.isBusy)
+            }
+            if let aheadBehindText {
+                Text(aheadBehindText)
+                    .font(theme.caption)
+            }
+            Text(vm.status?.upstream ?? "No upstream")
+                .lineLimit(1).truncationMode(.middle)
+                .font(theme.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var aheadBehindText: String? {

@@ -3,8 +3,8 @@ import RepoDeckKit
 import SwiftUI
 
 /// Read-only rendering of `vm.diffFiles` — a working file's diff or every
-/// file touched by a commit — hosted in `RepoDetailView`'s trailing
-/// `.inspector`. Loaded by `RepoViewModel.showDiff(_:)`, triggered from the
+/// file touched by a commit — hosted in `ContentView`'s trailing diff pane.
+/// Loaded by `RepoViewModel.showDiff(_:)`, triggered from the
 /// "View Diff" item in `FileChangeRow`/`CommitRow`'s context menus.
 ///
 /// v1 scope only: no syntax highlighting, no side-by-side, no word-level
@@ -47,12 +47,7 @@ struct DiffView: View {
             ProgressView("Loading diff…")
                 .padding(40)
         } else if let diffError = vm.diffError {
-            Text(diffError)
-                .font(theme.mono(11))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            RepositoryFailureBanner(vm: vm, failure: OperationFailure(message: diffError, command: "Load diff"))
         } else if vm.diffFiles.isEmpty {
             ContentUnavailableView("No Changes to Show", systemImage: "doc.text.magnifyingglass")
         } else {

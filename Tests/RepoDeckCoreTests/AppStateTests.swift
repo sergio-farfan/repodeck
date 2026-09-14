@@ -71,6 +71,29 @@ struct AppStateTests {
         #expect(!model.isScanning)
     }
 
+    @Test func identityReadFailureIsNotReportedAsMissingConfiguration() async throws {
+        let fixture = try CoreGitFixture()
+        let vm = RepoViewModel(repo: Repo(path: fixture.root), client: GitClient())
+        await vm.refreshIdentity()
+        let previous = try #require(vm.gitIdentity)
+        #expect(vm.hasLoadedIdentity)
+        vm.client = GitClient(gitPath: fixture.root.appendingPathComponent("missing-git").path)
+        await vm.refreshIdentity()
+        #expect(vm.identityLoadError != nil)
+        #expect(vm.gitIdentity == previous)
+        #expect(!vm.isLoadingIdentity)
+    }
+
+    @Test func externalConfigurationChangeRefreshesTheAuthorFooter() async throws {
+        let fixture = try CoreGitFixture()
+        let vm = RepoViewModel(repo: Repo(path: fixture.root), client: GitClient())
+        await vm.refreshIdentity()
+        try fixture.git(["config", "--local", "user.name", "Updated Author"])
+        await vm.refreshForExternalChange()
+        #expect(vm.gitIdentity?.name == "Updated Author")
+        #expect(vm.identityLoadError == nil)
+    }
+
     @Test func commitPreservesNewDraftWhileHookRuns() async throws {
         let fixture = try CoreGitFixture()
         let marker = fixture.root.appendingPathComponent("hook-started")
@@ -106,8 +129,53 @@ struct AppStateTests {
         let model = AppModel(preferences: UserDefaults(suiteName: "RepoDeckTests-\(UUID().uuidString)")!, startServices: false)
         model.repos = [vm]
         await model.fetchAll()
-        #expect(model.bulkSummary?.contains("1 skipped") == true)
-        #expect(model.bulkSummary?.contains("0 succeeded") == true)
+        #expect(model.bulkSummary?.skipped == 1)
+        #expect(model.bulkSummary?.succeeded == 0)
+        #expect(model.bulkSummary?.needsAttention == true)
+        #expect(model.bulkSummary?.repositories.first?.id == vm.id)
+        #expect(model.bulkSummary?.repositories.first?.result == .skipped("Repository is busy"))
+    }
+
+    @Test func bulkSyncRetainsResultsForTheOriginalRepositories() async throws {
+        let successful = try CoreGitFixture()
+        let failed = try CoreGitFixture()
+        let busy = try CoreGitFixture()
+        try successful.git(["remote", "add", "origin", successful.root.path])
+        try failed.git(["remote", "add", "origin", failed.root.appendingPathComponent("missing-remote").path])
+        let models = [successful, failed, busy].map { RepoViewModel(repo: Repo(path: $0.root), client: GitClient()) }
+        models[2].isBusy = true
+        let model = AppModel(preferences: UserDefaults(suiteName: "RepoDeckTests-\(UUID().uuidString)")!, startServices: false)
+        model.repos = models
+        await model.fetchAll()
+        let summary = try #require(model.bulkSummary)
+        #expect(summary.repositories.map(\.id) == models.map(\.id))
+        #expect(summary.succeeded == 1)
+        #expect(summary.failed == 1)
+        #expect(summary.skipped == 1)
+        #expect(summary.needsAttention)
+        #expect(summary.repositories[0].result == .succeeded)
+        guard case .failed(let reason) = summary.repositories[1].result else {
+            Issue.record("The failed remote was not reported for its repository")
+            return
+        }
+        #expect(reason.contains("missing-remote"))
+        #expect(summary.repositories[2].result == .skipped("Repository is busy"))
+        models[1].actionError = nil
+        model.repos = []
+        #expect(model.bulkSummary == summary)
+        #expect(model.bulkProgress == nil)
+    }
+
+    @Test func successfulBulkSyncDoesNotNeedAttention() async throws {
+        let fixture = try CoreGitFixture()
+        try fixture.git(["remote", "add", "origin", fixture.root.path])
+        let model = AppModel(preferences: UserDefaults(suiteName: "RepoDeckTests-\(UUID().uuidString)")!, startServices: false)
+        model.repos = [RepoViewModel(repo: Repo(path: fixture.root), client: GitClient())]
+        await model.fetchAll()
+        let summary = try #require(model.bulkSummary)
+        #expect(summary.succeeded == 1)
+        #expect(!summary.needsAttention)
+        #expect(summary.text == "Fetch All: 1 succeeded, 0 failed, 0 skipped")
     }
 
     @Test func cancelledCommandKeepsRepositoryLockedUntilProcessCleanupFinishes() async throws {

@@ -6,6 +6,9 @@ import SwiftUI
 /// Hosting UI with no dependency on the application's repository view model.
 /// Drafts are saved per worktree/destination; remote writes require a concrete preview.
 struct ReviewsView: View {
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
+    @Environment(AppModel.self) private var model
     let repoURL: URL
     let gitPath: String
     let ghPath: String?
@@ -31,11 +34,10 @@ struct ReviewsView: View {
         VStack(spacing: 0) {
             connectionBar
             if let error = store.error {
-                HStack(alignment: .top) {
-                    Text(error).textSelection(.enabled).foregroundStyle(.red)
-                    Spacer()
-                    Button("Dismiss") { store.error = nil }
-                }.font(.caption).padding(8)
+                OperationMessageView(failure: OperationFailure(message: error, command: "Hosting review operation"), onAction: recover) { store.error = nil }
+            }
+            if let diagnostic = store.diagnostic, !diagnostic.isAuthenticated, store.error == nil {
+                OperationMessageView(failure: OperationFailure(message: diagnostic.message, command: "Connect to hosting service"), onAction: recover)
             }
             Divider()
             if store.client != nil {
@@ -45,7 +47,7 @@ struct ReviewsView: View {
                 }
             } else {
                 ContentUnavailableView("Connect a Hosting Service", systemImage: "network",
-                    description: Text(store.diagnostic?.message ?? "Select a remote and its hosting provider. Sign in using gh or glab, then reconnect."))
+                    description: Text("Select a remote and its hosting provider. Sign in using gh or glab, then use Connect / Refresh. Open Details & Help above for any connection error."))
             }
         }
         .task(id: configuration) {
@@ -78,6 +80,21 @@ struct ReviewsView: View {
             }.padding(20).frame(width: 560)
         }
     }
+    private func recover(_ action: FailureRecoveryAction) {
+        switch action {
+        case .openSettings: openSettings()
+        case .configureIdentity:
+            model.gitIdentityTarget = model.repos.first(where: { $0.repo.path == repoURL })
+        case .openTerminal: model.openInTerminal(repoURL, repoID: repoURL.resolvingSymlinksInPath().standardizedFileURL.path)
+        case .refresh: Task { await store.refresh() }
+        case .showChanges, .showConflicts, .showBranches:
+            if let vm = model.repos.first(where: { $0.repo.path == repoURL }) {
+                vm.selectedSection = action == .showChanges ? .changes : action == .showConflicts ? .conflicts : .branches
+            }
+        case .help: HelpWindow.open(.troubleshooting, using: openWindow)
+        }
+    }
+
     private var connectionBar: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
@@ -94,7 +111,10 @@ struct ReviewsView: View {
                 Button("Connect / Refresh") { Task { await store.connect() } }.disabled(store.isBusy)
                 if store.isBusy { ProgressView().controlSize(.small) }
             }
-            if let diagnostic = store.diagnostic { Text(diagnostic.message).font(.caption).foregroundStyle(.secondary) }
+            if let diagnostic = store.diagnostic, diagnostic.isAuthenticated {
+                Text("Connected as \(diagnostic.account ?? "authenticated account")")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
             if let destination = store.client?.repository { Text(destination.displayName).font(.caption).textSelection(.enabled) }
         }.padding(10)
     }

@@ -44,6 +44,8 @@ public final class AppModel {
     public var selectedRepoID: String?
     /// The repo whose settings sheet is presented; nil = no sheet.
     public var repoSettingsTarget: RepoViewModel?
+    /// Captures the repository whose author settings are being edited.
+    public var gitIdentityTarget: RepoViewModel?
     /// Whether the ⌘K command palette overlay is presented.
     public var isPaletteVisible = false
     /// Consolidated per-repo settings (pin, auto-rebase, auto-fetch
@@ -68,11 +70,9 @@ public final class AppModel {
     /// guard: a bulk op only starts when this is nil, so Fetch All and Pull
     /// All can never overlap, with each other or with themselves.
     public var bulkProgress: BulkProgress?
-    /// Transient failure count from the most recently finished bulk op.
-    /// Per-repo errors live in each repo's own `actionError` (surfaced by
-    /// that repo's `ErrorBanner` once selected); this is just a toolbar-level
-    /// summary the user can dismiss.
-    public var bulkSummary: String?
+    /// Dismissible results of the most recent bulk operation, bound to the
+    /// original repositories so users can inspect failures and skipped work.
+    public var bulkSummary: BulkOperationSummary?
 
     public var client: GitClient
     @ObservationIgnored private let preferences: UserDefaults
@@ -376,7 +376,7 @@ public final class AppModel {
     /// semaphore — not this loop — bounds real subprocess concurrency, same
     /// as `refreshAllStatuses`. Each repo's own `performAction` discipline
     /// records that repo's failure in its own `actionError`; this driver only
-    /// tallies how many repos failed, for the toolbar-level `bulkSummary`.
+    /// retains each result for the dismissible `bulkSummary` and its details.
     private func runBulk(
         progressVerb: String,
         summaryLabel: String,
@@ -389,20 +389,25 @@ public final class AppModel {
         bulkSummary = nil
         bulkProgress = BulkProgress(verb: progressVerb, done: 0, total: targets.count)
 
-        var failures = 0
-        var skipped = 0
-        await withTaskGroup(of: OperationResult.self) { group in
-            for vm in targets { group.addTask { await action(vm) } }
-            for await result in group {
-                incrementBulkDone()
-                switch result {
-                case .succeeded: break
-                case .failed: failures += 1
-                case .skipped: skipped += 1
+        var results: [BulkOperationSummary.RepositoryResult] = []
+        await withTaskGroup(of: BulkOperationSummary.RepositoryResult.self) { group in
+            for vm in targets {
+                let id = vm.id
+                let name = vm.repo.name
+                let path = vm.repo.path
+                group.addTask {
+                    .init(id: id, name: name, path: path, result: await action(vm))
                 }
             }
+            for await result in group {
+                incrementBulkDone()
+                results.append(result)
+            }
         }
-        bulkSummary = "\(summaryLabel): \(targets.count - failures - skipped) succeeded, \(failures) failed, \(skipped) skipped"
+        let order = Dictionary(uniqueKeysWithValues: targets.enumerated().map { ($0.element.id, $0.offset) })
+        bulkSummary = BulkOperationSummary(operation: summaryLabel, repositories: results.sorted {
+            order[$0.id, default: 0] < order[$1.id, default: 0]
+        })
         bulkProgress = nil
     }
 

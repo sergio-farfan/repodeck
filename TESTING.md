@@ -36,6 +36,48 @@ The standard release is ad-hoc signed and unnotarized. Developer ID signing and 
 
 Record the build commit, macOS/toolchain, scenarios exercised, failures, and outstanding checks in the release notes. Automated fixture tests alone do not validate real credential helpers, accessibility behavior, or Gatekeeper.
 
+## Git identity setup — development validation, 2026-09-14
+
+The working changes passed **379 tests across 28 suites**, a debug build, and a universal arm64/x86_64 build with Xcode 26.6 / Swift 6.3.3. The refreshed development bundle passed strict ad-hoc signature verification. New regressions cover scoped identity reads/writes, repository overrides, strict UTF-8/input handling, preservation of unrelated configuration, partial saves, cancellation, stale repository/configuration/tool checks, late responses, scope-specific drafts, and identity read failures. Global-write tests use wrapper executables that direct Git to fixture-owned configuration files; they do not modify the developer's global settings.
+
+Native checks in an isolated test app on macOS 27 verified opening the setup from the sidebar, saving a repository identity, saving a separate default while retaining and explaining the repository override, updating the footer, following Details & Help → Configure Git Identity, and cancelling an edited form without saving it. The form remained scrollable with its Save/Cancel controls visible. No real repository identity or SSH configuration was changed during validation.
+
+Manual follow-up: verify the Repository Settings entry, an incomplete identity, inaccessible configuration with retry, linked-worktree overrides, and keyboard/VoiceOver behavior on supported macOS versions. The full distribution and accessibility matrix remains separate from these checks.
+
+### Commit author resolution follow-up
+
+The follow-up passed **389 tests across 28 suites**. Ten new regressions cover Git-resolved authors versus editable defaults, author-specific configuration and inherited environment values, matching the author recorded by an ordinary commit, missing/invalid authors without blocking configuration repair, invalid overrides remaining after a verified save, cancellation, strict output parsing, and read-only preservation. All configuration writes use isolated fixtures. After the final Help wording change, its five content/search tests passed again.
+
+Native checks in the isolated app verified displaying an author override while retaining different editable defaults, showing a selectable diagnostic for an invalid override, and preserving that warning after successfully saving the defaults. Scrolling exposed the full explanation and Reload control while Save/Done remained visible. A final screenshot check at a 220-point sidebar width verified the compact unavailable explanation and Configure Author/Retry controls without truncation or overlap. The final universal arm64/x86_64 development build passed strict ad-hoc signature verification. These checks do not certify the full accessibility or supported-macOS matrix above.
+
+## Error messages and offline Help — development validation, 2026-09-13
+
+Before the subsequent diff-pane replacement, the working changes based on `9e3e697` passed the full suite: **354 tests across 27 suites**. After UI/content refinements, the 26 Help, error-guidance, and application-state tests passed again; the nine error-guidance tests also passed after bounding diagnostic classification. Debug and universal release-configuration builds passed with Xcode 26.6 / Swift 6.3.3. That universal development app contains both arm64 and x86_64 and passes ad-hoc signature verification. It is not a published release.
+
+Native UI checks used a separate test application with an isolated temporary repository and preferences on macOS 27. Checks covered:
+
+- A 100-line diagnostic: bounded inline title/operation/explanation, accessible recovery controls, and scrollable full technical details.
+- Success and mixed failed/skipped bulk summaries, readable per-repository outcomes, expandable reasons, and disabled navigation for a repository no longer in the app.
+- The summary and error were readable together without sidebar/titlebar overlap in the checked state. Moving the native diff inspector to the outer navigation split removed the observed toolbar-material overlap, but the later crash below showed that this placement was not a complete fix.
+- Light/dark appearance, an 800-point-wide window, and the 18-point font setting. Sync controls reflow and sidebar labels retain usable width.
+- Help → RepoDeck Help, search for `403`, related-topic navigation and Back, and contextual Help clearing an earlier query. On this macOS version, ⌘? opens the system Help menu/search; selecting RepoDeck Help opens the offline guide.
+
+Full VoiceOver/Full Keyboard Access, Increase Contrast, exact 800×500 layout, native Intel execution, macOS 15, and a clean-machine installation were not revalidated in this pass. These UI checks do not validate live hosting credentials or remote write permissions.
+
+### Diff presentation follow-up
+
+A crash was subsequently reported on macOS 27. An isolated native reproduction triggered the same AppKit constraint-update loop when opening **View Diff**, with `_postWindowNeedsUpdateConstraints` in the exception stack. The native inspector has been replaced with an `HSplitView` in the detail column below the bulk summary. Its first workspace child remains mounted when the diff opens or closes, and an explicit geometry constraint keeps both panes inside the available detail area. The window minimum grows while a diff is visible to leave room for the widest supported sidebar.
+
+After this replacement, all 354 tests across 27 suites passed again. An isolated native test on macOS 27 completed 40 cycles of file-diff opening/closing, switching between two disposable repositories, resizing, scan-indicator transitions, error/bulk-summary presentation, and command-pane visibility changes; each cycle verified the commit draft remained intact. A focused unified-log check found no constraint-loop warnings during the run. These transitions exercised injected presentation state, not live remote bulk operations. The previously crashing View Diff action and Close control were also exercised directly. After the final minimum-width adjustment, the 1100-point diff layout and Help menu/search were checked again, and a universal arm64/x86_64 development bundle was rebuilt and its ad-hoc signature verified. Native divider dragging and the fully expanded sidebar still need manual validation. Full manual coverage below remains separate from this bounded regression run.
+
+Use disposable repositories and record the macOS version, build, window size, and result for each check:
+
+- Open and close file and commit diffs repeatedly, including an error or empty diff, and drag the divider between the workspace and diff pane.
+- Switch repositories while a diff is open, then return. Verify that each worktree retains its own commit draft, conflict draft, selected workspace, and diff selection.
+- Resize with the sidebar visible, both with and without a diff, down to the supported minimum size for each layout. Check normal and enlarged fonts for readable controls and stable pane widths.
+- Start a folder scan and disposable-repository bulk operations while a diff is open. Check toolbar progress changes, completion summaries, and sidebar visibility for layout loops or overlap.
+- Display a long error and a bulk summary together. Open and dismiss Details & Help and Results, use safe corrective actions, then open, search, and close the Help window. Verify that messages and controls remain readable and that navigation preserves drafts.
+
 ## Local beta validation — 2026-09-13
 
 The development changes were validated on macOS 27.0 with Xcode 26.6 / Swift 6.3.3. CI declares Xcode 26.3 / Swift 6.2 and separate native Apple silicon and Intel runners. The supported deployment minimum remains macOS 15; a clean-machine macOS 15 check was not performed.

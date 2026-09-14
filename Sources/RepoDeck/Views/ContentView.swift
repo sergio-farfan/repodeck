@@ -11,12 +11,37 @@ struct ContentView: View {
 
         NavigationSplitView {
             RepoListView()
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 400)
         } detail: {
-            detailContent
+            VStack(spacing: 0) {
+                if let summary = model.bulkSummary {
+                    BulkSummaryBanner(summary: summary).id(summary.id)
+                    Divider()
+                }
+                // Keep the workspace mounted when the diff opens or closes.
+                // A native inspector around NavigationSplitView can repeatedly
+                // invalidate the window's toolbar constraints on macOS 27.
+                GeometryReader { geometry in
+                    HSplitView {
+                        detailContent
+                            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+
+                        if let selected = model.selectedRepo, selected.isDiffPresented {
+                            DiffView(vm: selected)
+                                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    }
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+            }
         }
-        .frame(minWidth: 800, minHeight: 500)
+        // Budget for the widest sidebar (400), both panes (320 each), and dividers.
+        .frame(minWidth: model.selectedRepo?.isDiffPresented == true ? 1100 : 800, minHeight: 500)
         .sheet(item: $model.repoSettingsTarget) { vm in
             RepoSettingsSheet(vm: vm)
+        }
+        .sheet(item: $model.gitIdentityTarget) { vm in
+            GitIdentitySheet(vm: vm)
         }
         .overlay {
             if model.isPaletteVisible {
@@ -36,11 +61,6 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             guard !model.isScanning, model.bulkProgress == nil else { return }
             Task { await model.refreshAllStatuses() }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let bulkSummary = model.bulkSummary {
-                bulkSummaryBanner(bulkSummary)
-            }
         }
         .toolbar {
             ToolbarItemGroup {
@@ -115,29 +135,6 @@ struct ContentView: View {
                 }
             }
         }
-    }
-
-    /// Transient, dismissible summary shown after a bulk fetch/pull finishes
-    /// with at least one per-repo failure. The individual failures live in
-    /// each repo's own `actionError`, surfaced by that repo's `ErrorBanner`
-    /// once selected — this is just a toolbar-level count.
-    private func bulkSummaryBanner(_ text: String) -> some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(text)
-                .font(.caption)
-            Spacer()
-            Button {
-                model.bulkSummary = nil
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-            .help("Dismiss")
-        }
-        .padding(8)
-        .background(Color.orange.opacity(0.15))
     }
 
     @ViewBuilder

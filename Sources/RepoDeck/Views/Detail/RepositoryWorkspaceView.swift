@@ -17,7 +17,9 @@ struct RepositoryWorkspaceView: View {
         @Bindable var workspace = workspace
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let error = workspace.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                if let error = workspace.error {
+                    RepositoryFailureBanner(vm: vm, failure: OperationFailure(message: error, command: "Load branches and worktrees")) { workspace.error = nil }
+                }
                 GroupBox("Create branch") {
                     HStack {
                         TextField("New branch name", text: $workspace.branchName)
@@ -190,7 +192,9 @@ struct CommitGraphView: View {
                 Toggle("Search", isOn: $showSearch).toggleStyle(.button)
                 Button("Refresh") { Task { await workspace.refresh(using: vm) } }
             }.padding(10)
-            if let error = workspace.error { Text(error).foregroundStyle(.red).padding(8) }
+            if let error = workspace.error {
+                RepositoryFailureBanner(vm: vm, failure: OperationFailure(message: error, command: "Load history")) { workspace.error = nil }
+            }
             if showSearch { HistoryListView(vm: vm) }
             else {
                 let lanes = GraphLaneRow.layout(workspace.graph)

@@ -19,23 +19,20 @@ struct RepoDetailView: View {
     @AppStorage("detail.commandFraction") private var commandFraction: Double = 0.7
 
     var body: some View {
-        @Bindable var vm = vm
-
         // Always route through `VerticalSplit`, toggling `isSplit`, so the
         // command pane docks/undocks by collapsing the split rather than by
         // moving `detailContent` in and out of the tree — which would reset
         // the Changes/History scroll positions and other `@State` on every
         // toggle (see `VerticalSplit`'s note).
-        VerticalSplit(fraction: $commandFraction, isSplit: vm.isCommandPaneVisible) {
-            detailContent
-        } bottom: {
-            CommandRunnerView(vm: vm)
+        VStack(spacing: 0) {
+            detailHeader
+            VerticalSplit(fraction: $commandFraction, isSplit: vm.isCommandPaneVisible) {
+                detailContent
+            } bottom: {
+                CommandRunnerView(vm: vm)
+            }
         }
         .navigationTitle(vm.repo.name)
-        .inspector(isPresented: $vm.isDiffPresented) {
-            DiffView(vm: vm)
-                .inspectorColumnWidth(min: 320, ideal: 460, max: 800)
-        }
         .task(id: vm.id) {
             await vm.refreshForExternalChange()
             if model.isGhAvailable, let gh = model.gh {
@@ -67,16 +64,15 @@ struct RepoDetailView: View {
         }
     }
 
-    /// The pre-existing detail pane content (banners, commit box, sync
-    /// controls, the Changes/History split) — factored out so it renders
-    /// identically whether or not the command-runner pane is docked below
-    /// it, instead of being duplicated across both branches of `body`.
-    @ViewBuilder
-    private var detailContent: some View {
+    /// Messages stay outside the resizable command pane so a small upper
+    /// pane cannot push recovery controls above the window's content area.
+    private var detailHeader: some View {
         @Bindable var vm = vm
-
-        VStack(alignment: .leading, spacing: 0) {
-            ErrorBanner(error: $vm.actionError)
+        return VStack(alignment: .leading, spacing: 0) {
+            ErrorBanner(vm: vm)
+            if let error = vm.statusError, vm.actionError == nil {
+                RepositoryFailureBanner(vm: vm, failure: OperationFailure(message: error, command: "Read repository status"))
+            }
             NoticeBanner(notice: $vm.actionNotice)
             SyncControlsView(vm: vm)
             if vm.operationState != .normal {
@@ -94,6 +90,12 @@ struct RepoDetailView: View {
             .padding(10)
             .fixedSize(horizontal: false, vertical: true)
             Divider()
+        }
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
             switch vm.selectedSection {
             case .changes:
                 CommitBoxView(vm: vm)

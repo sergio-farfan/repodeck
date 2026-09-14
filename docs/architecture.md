@@ -6,6 +6,22 @@ RepoDeck is a Swift Package Manager application for macOS 15+. It uses the user'
 - **RepoDeckCore** contains observable application and repository state, refresh coordination, operation state, and background scheduling. It can be tested independently of SwiftUI views.
 - **RepoDeck** contains SwiftUI/AppKit presentation, native panels and application launch actions, commands, and appearance settings.
 
+## Messages and Help
+
+`OperationFailure` maps recognized diagnostics to a short explanation and safe navigation or inspection actions. It retains the operation, exit code, and full original output for the scrollable details sheet. Unknown diagnostics remain available without guessing a specific remedy. Recovery buttons do not retry writes, delete lock files, or replace conflict drafts.
+
+Bulk results retain repository identities and their success/failure/skipped outcomes independently of later status refreshes. The summary occupies a row in the detail column above an `HSplitView`. The workspace remains mounted as the split's first child while a resizable diff pane is added or removed as the second child. This keeps diff presentation within the detail area and preserves workspace view state when the pane opens or closes. Error output is bounded inline and accessible in full through Details & Help.
+
+`HelpContent` provides compiled, searchable offline articles with stable topic identifiers. The native Help window, menu, and contextual links use those identifiers. Content and search tests check coverage, ranking, and valid related topics; window layout and assistive-technology behavior require manual checks.
+
+## Commit author settings
+
+`GitIdentityEditor` captures the destination repository and preserves form drafts across scope changes and failures. Git reads and writes stay in `RepoDeckKit`; the editor coordinates saves through repository mutation state and a shared guard for default-identity writes. The form requires an explicit Save, reads back the chosen scope, and reports the effective identity when local or worktree settings override a default. Git writes the two fields separately, so a later failure can leave a partial save; the error reports that limitation and does not attempt an unsafe rollback over external edits.
+
+The sidebar reads `git var GIT_AUTHOR_IDENT` through the same Git client environment used for ordinary new commits. Git resolves author-specific configuration, inherited environment overrides, and fallback values; RepoDeck does not reconstruct that precedence from `user.name` and `user.email`. The result is a current default, not a guarantee for operations such as cherry-pick or rebase that preserve an existing author, or against external configuration changes before a later commit. Read failures remain visible and stale author details are not presented as current.
+
+The setup form still edits `user.name` and `user.email` at the chosen scope. It prefills only those configured defaults, never copying an inferred or overridden author into settings. Failure to resolve a commit author does not block loading valid configuration for repair. Saved settings are verified independently of author resolution, so a remaining override or invalid author has an explicit explanation. External repository refreshes reread the author. Author-identity errors open the setup form; SSH and hosting authentication errors retain their separate recovery actions.
+
 ## Repository operations
 
 Discovery first locates ordinary checkouts and bare metadata stores, then asks Git for its NUL-delimited worktree registry. It includes linked/nested checkouts outside the scanned folder, omits missing/prunable entries and bare stores from the editable list, and deduplicates canonical paths. Each checkout and its external metadata directories are watched.

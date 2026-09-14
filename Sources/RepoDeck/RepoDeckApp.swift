@@ -18,6 +18,7 @@ struct RepoDeckApp: App {
                 .tint(theme.accent)
         }
         .commands {
+            HelpCommands()
             CommandGroup(after: .toolbar) {
                 Button("Refresh Repositories") {
                     Task { await model.rescan() }
@@ -30,6 +31,15 @@ struct RepoDeckApp: App {
                 .keyboardShortcut("k", modifiers: .command)
             }
         }
+
+        Window("RepoDeck Help", id: HelpWindow.id) {
+            HelpView()
+                .environment(\.theme, Theme(settings: theme))
+                .preferredColorScheme(theme.appearance.colorScheme)
+                .tint(theme.accent)
+        }
+        .defaultSize(width: 940, height: 700)
+        .windowResizability(.contentMinSize)
 
         // Auto-adds the ⌘, "Settings…" menu item.
         Settings {

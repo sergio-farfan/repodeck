@@ -14,7 +14,7 @@ public struct UndoRecord {
 }
 
 /// What `showDiff(_:)` is currently (or was last) loading a diff for; a
-/// non-nil value drives the `.inspector` open via `isDiffPresented`.
+/// non-nil value opens the diff pane via `isDiffPresented`.
 public enum DiffTarget: Equatable {
     case workingFile(FileChange)   // area decides staged/unstaged/untracked
     case commit(Commit)
@@ -53,9 +53,13 @@ public final class RepoViewModel: @MainActor Identifiable {
     /// Populated by `refreshStashes()`; rendered by `StashSection` at the
     /// bottom of `ChangesListView`.
     public var stashes: [StashEntry] = []
-    /// Effective git identity shown by the sidebar footer. Passive like
-    /// `refreshStashes`: stale beats blank.
+    /// Author Git resolves for ordinary new commits. Last-known values are
+    /// retained on failure but must not be presented as current without warning.
     public var gitIdentity: GitIdentity?
+    public private(set) var isLoadingIdentity = false
+    public private(set) var hasLoadedIdentity = false
+    public private(set) var identityLoadError: String?
+    @ObservationIgnored private var identityGeneration = 0
     /// Free-text history search bound to `HistoryListView`'s search field.
     /// Trimmed empty (the default) means "no filter" — `refreshLog()` falls
     /// back to the full `client.log(in:)`.
@@ -109,24 +113,21 @@ public final class RepoViewModel: @MainActor Identifiable {
     private var prInfoBranch: String?
 
     /// The file or commit `showDiff(_:)` is loading/loaded a diff for;
-    /// non-nil drives the read-only diff `.inspector` open on
-    /// `RepoDetailView` via `isDiffPresented`. Set to nil to dismiss.
+    /// non-nil opens the diff pane in `ContentView` via `isDiffPresented`.
+    /// Set to nil to dismiss.
     public var diffTarget: DiffTarget?
     /// Rendered result of the most recent `showDiff(_:)` call; consumed by
     /// `DiffView`.
     public var diffFiles: [FileDiff] = []
     /// True while `showDiff(_:)`'s git call is in flight.
     public var isLoadingDiff = false
-    /// Set by a failed `showDiff(_:)`; shown inline inside the inspector —
+    /// Set by a failed `showDiff(_:)`; shown inline inside the diff pane —
     /// deliberately NOT `actionError`, since a diff load must never disable
     /// the git action buttons or paint `RepoDetailView`'s error banner.
     public var diffError: String?
 
-    /// Binding source for `.inspector(isPresented:)` on `RepoDetailView`:
-    /// true whenever `diffTarget` is set. The setter backs the inspector's
-    /// own dismiss chrome (its close button/swipe) — SwiftUI writes `false`
-    /// there, which this turns into clearing `diffTarget`; it never writes
-    /// `true` itself (that only happens via `showDiff(_:)`).
+    /// True whenever a diff target is selected. Dismissing clears the target;
+    /// presenting a diff requires choosing one through `showDiff(_:)`.
     public var isDiffPresented: Bool {
         get { diffTarget != nil }
         set { if !newValue { diffTarget = nil } }
@@ -241,6 +242,7 @@ public final class RepoViewModel: @MainActor Identifiable {
         await refreshContext()
         await refreshLog()
         await refreshStashes()
+        await refreshIdentity()
         if let target = diffTarget { await showDiff(target) }
         refreshRevision += 1
     }
@@ -354,20 +356,34 @@ public final class RepoViewModel: @MainActor Identifiable {
         stashes = (try? await client.stashList(in: repo.path)) ?? stashes
     }
 
-    /// Refreshes `gitIdentity` from the repo's effective `git config`.
-    /// Passive like `refreshStashes`: no `isBusy`, no `actionError` banner —
-    /// a stale identity beats a blank one, so a failure leaves it untouched.
-    /// Called from `SidebarIdentityFooter.task(id:)` on selection change.
+    /// Ask Git to resolve the author, including author-specific configuration
+    /// and inherited environment overrides. Failures remain visible for repair.
     public func refreshIdentity() async {
-        gitIdentity = (try? await client.configuredIdentity(in: repo.path)) ?? gitIdentity
+        identityGeneration += 1
+        let generation = identityGeneration
+        let identityClient = client
+        isLoadingIdentity = true
+        defer { if generation == identityGeneration { isLoadingIdentity = false } }
+        do {
+            let identity = try await identityClient.effectiveCommitAuthor(in: repo.path)
+            guard generation == identityGeneration, identityClient.gitPath == client.gitPath else { return }
+            gitIdentity = identity
+            hasLoadedIdentity = true
+            identityLoadError = nil
+        } catch is CancellationError {
+            // A replaced refresh must not report missing configuration.
+        } catch {
+            guard generation == identityGeneration, identityClient.gitPath == client.gitPath else { return }
+            identityLoadError = error.localizedDescription
+        }
     }
 
     /// Loads the diff for `target` into `diffFiles`, driving `DiffView`
-    /// inside the `.inspector`. Read-only with its own guard — deliberately
+    /// inside the diff pane. Read-only with its own guard — deliberately
     /// NOT routed through `performAction`: a diff load must not disable the
     /// git action buttons (`isBusy`) or paint `actionError`'s banner, so
-    /// failures land in `diffError` and are shown inline in the inspector
-    /// instead. Setting `diffTarget` up front is what opens the inspector
+    /// failures land in `diffError` and are shown inline in the diff pane
+    /// instead. Setting `diffTarget` up front is what opens the diff pane
     /// (via `isDiffPresented`), before the load even starts.
     ///
     /// `.unmerged` is special-cased with no git call at all: a conflicted
@@ -427,7 +443,7 @@ public final class RepoViewModel: @MainActor Identifiable {
     /// applies it plain (`cached: true, reverse: false`) — this IS an index
     /// mutation, so it goes through `performAction` (busy-guard,
     /// `actionError` banner on failure such as "patch does not apply",
-    /// status refresh). After the index changes, the diff inspector is
+    /// status refresh). After the index changes, the diff pane is
     /// reloaded for the same target so the staged hunk disappears from the
     /// unstaged diff (a now-empty diff shows the empty state) while any
     /// other hunks in the file stay put.

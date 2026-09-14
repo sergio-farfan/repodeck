@@ -403,24 +403,126 @@ public struct GitClient: Sendable {
 
     // MARK: - Identity
 
-    /// Effective commit identity for `repo`: `git config user.name` +
-    /// `git config user.email`, each resolved the way git itself would
-    /// (local config overriding global). `git config <key>` exits 1 with
-    /// empty stdout when the key is unset anywhere — that is "not
-    /// configured", not a failure, so exit 1 is tolerated (same mechanism
-    /// as `diffUntracked`) and a blank trimmed value becomes a nil field.
+    /// Effective `user.name` and `user.email` configuration values across Git
+    /// scopes. These editable defaults do not include `author.*` or author
+    /// environment overrides; use `effectiveCommitAuthor` for a new commit.
+    /// Missing or blank configuration values are represented by nil fields.
     public func configuredIdentity(in repo: URL) async throws -> GitIdentity {
         let name = try await configValue("user.name", in: repo)
         let email = try await configValue("user.email", in: repo)
         return GitIdentity(name: name, email: email)
     }
 
+    /// Resolves the author Git would use for an ordinary new commit, using the
+    /// same executable and inherited environment as `commit(message:in:)`.
+    /// Git applies author-specific configuration, environment overrides, and
+    /// its own identity normalization. This read does not change configuration.
+    /// Author-preserving operations such as amend/rebase can use an old author.
+    public func effectiveCommitAuthor(in repo: URL) async throws -> GitIdentity {
+        let result = try await run(["var", "GIT_AUTHOR_IDENT"], in: repo,
+                                   maxOutputBytes: 64 * 1024, timeout: .seconds(10))
+        guard !result.outputTruncated else {
+            throw GitError(command: "git var GIT_AUTHOR_IDENT", exitCode: result.exitCode,
+                           stderr: "Git author output exceeded the 64 KiB limit.")
+        }
+        guard var output = String(data: result.stdout, encoding: .utf8) else {
+            throw GitError(command: "git var GIT_AUTHOR_IDENT", exitCode: -1,
+                           stderr: "Git returned an author identity containing text outside UTF-8.")
+        }
+        func malformed() -> GitError {
+            GitError(command: "git var GIT_AUTHOR_IDENT", exitCode: -1,
+                     stderr: "Git returned an unexpected author identity format.")
+        }
+        // Parse from the timestamp suffix so spaces and punctuation inside
+        // the name/email stay exactly as Git emitted them.
+        guard output.last == "\n" else { throw malformed() }
+        output.removeLast()
+        guard !output.contains("\n"), !output.utf8.contains(0),
+              let timezoneStart = output.lastIndex(of: " "),
+              let timestampStart = output[..<timezoneStart].lastIndex(of: " ") else { throw malformed() }
+        let timezone = output[output.index(after: timezoneStart)...]
+        let timestamp = output[output.index(after: timestampStart)..<timezoneStart]
+        let digits = timestamp.first == "-" ? timestamp.dropFirst() : timestamp
+        guard timezone.utf8.count == 5, timezone.first == "+" || timezone.first == "-",
+              timezone.dropFirst().utf8.allSatisfy({ (48...57).contains($0) }),
+              !digits.isEmpty, digits.utf8.allSatisfy({ (48...57).contains($0) }) else { throw malformed() }
+        let identity = output[..<timestampStart]
+        guard identity.last == ">", let opening = identity.lastIndex(of: "<"), opening > identity.startIndex,
+              identity[identity.index(before: opening)] == " " else { throw malformed() }
+        let name = String(identity[..<identity.index(before: opening)])
+        let email = String(identity[identity.index(after: opening)..<identity.index(before: identity.endIndex)])
+        guard !name.isEmpty, !name.contains("<"), !name.contains(">"),
+              !email.contains("<"), !email.contains(">") else { throw malformed() }
+        return GitIdentity(name: name, email: email)
+    }
+
+    /// Reads only the selected configuration scope, including files that scope
+    /// includes. A missing repository value does not fall back to the global one.
+    public func configuredIdentity(in repo: URL, scope: GitIdentityScope) async throws -> GitIdentity {
+        let name = try await configValue("user.name", in: repo, scope: scope)
+        let email = try await configValue("user.email", in: repo, scope: scope)
+        return GitIdentity(name: name, email: email)
+    }
+
+    /// Writes the two fields separately using Git's own configuration locks.
+    /// Callers coordinate repository access; an interrupted save is not rolled
+    /// back because another Git process may have edited the configuration.
+    public func setConfiguredIdentity(name: String, email: String, scope: GitIdentityScope, in repo: URL) async throws {
+        let name = try validatedIdentityField(name, label: "Name", isEmail: false)
+        let email = try validatedIdentityField(email, label: "Email", isEmail: true)
+        try Task.checkCancellation()
+        do {
+            for (key, value) in [("user.name", name), ("user.email", email)] {
+                let result = try await run(["config", identityScopeOption(scope), "--replace-all", key, value], in: repo)
+                guard !result.outputTruncated else {
+                    throw GitError(command: "git config", exitCode: result.exitCode,
+                                   stderr: "Git configuration output exceeded its limit.\n" + result.stderr)
+                }
+            }
+        } catch {
+            let warning = "Commit author defaults may be partially saved. Reload both values before trying again."
+            if let gitError = error as? GitError {
+                throw GitError(command: gitError.command, exitCode: gitError.exitCode,
+                               stderr: warning + "\n\n" + gitError.stderr)
+            }
+            let detail = error is CancellationError ? "Saving commit author defaults was cancelled." : error.localizedDescription
+            throw GitError(command: "git config", exitCode: -1, stderr: warning + "\n\n" + detail)
+        }
+    }
+
+    private func validatedIdentityField(_ raw: String, label: String, isEmail: Bool) throws -> String {
+        guard !raw.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) }),
+              !raw.contains("<"), !raw.contains(">") else {
+            throw GitError(command: "git config", exitCode: -1,
+                           stderr: "\(label) cannot contain control characters, line breaks, or angle brackets.")
+        }
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            throw GitError(command: "git config", exitCode: -1, stderr: "\(label) is required.")
+        }
+        guard !isEmail || !value.contains(where: \.isWhitespace) else {
+            throw GitError(command: "git config", exitCode: -1, stderr: "Email cannot contain whitespace.")
+        }
+        return value
+    }
+
+    private func identityScopeOption(_ scope: GitIdentityScope) -> String {
+        scope == .repository ? "--local" : "--global"
+    }
+
     /// `git config <key>` -> trimmed value, nil when unset (exit 1) or set
     /// to an empty/whitespace-only string.
-    private func configValue(_ key: String, in repo: URL) async throws -> String? {
-        let result = try await run(["config", key], in: repo, toleratedExitCodes: [1])
-        let value = String(decoding: result.stdout, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    private func configValue(_ key: String, in repo: URL, scope: GitIdentityScope? = nil) async throws -> String? {
+        let options = scope.map { [identityScopeOption($0), "--includes", "--get"] } ?? []
+        let result = try await run(["config"] + options + [key], in: repo, toleratedExitCodes: [1])
+        if result.outputTruncated {
+            throw GitError(command: "git config", exitCode: result.exitCode, stderr: "Git configuration output exceeded its limit.")
+        }
+        guard let text = String(data: result.stdout, encoding: .utf8) else {
+            throw GitError(command: "git config", exitCode: -1,
+                           stderr: "Git configuration contains text outside UTF-8. Edit it with Git or a text editor before saving an identity.")
+        }
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : value
     }
 
@@ -614,13 +716,9 @@ public struct GitClient: Sendable {
         }
         // `ProcessRunner` enforces `maxOutputBytes` by SIGTERM-ing the child,
         // which makes `terminationStatus` a nonzero signal exit (15) rather
-        // than 0 — that is expected, not a failure. Only `status` and the
-        // `diff`/`diffUntracked`/`diffCommit` methods pass `maxOutputBytes`,
-        // so this can't mask a real failure of any other command. Unlike
-        // `status` (which hands a truncated-but-partial parse to
-        // `PorcelainParser`), the diff methods treat `outputTruncated` as
-        // their own throw condition after this returns — see
-        // `diffTooLargeError`.
+        // than 0. Return the flagged result for callers to handle explicitly:
+        // status can preserve partial records; diffs and identity reads reject
+        // truncated output rather than interpreting it as complete data.
         guard result.exitCode == 0 || result.outputTruncated || toleratedExitCodes.contains(result.exitCode) else {
             throw GitError(
                 command: commandString(fullArguments),

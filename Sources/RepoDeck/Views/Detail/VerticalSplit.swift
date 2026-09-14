@@ -50,13 +50,15 @@ struct VerticalSplit<Top: View, Bottom: View>: View {
 
             VStack(spacing: 0) {
                 top
-                    .frame(height: isSplit ? topHeight : totalHeight)
+                    .frame(height: isSplit ? topHeight : totalHeight, alignment: .top)
+                    .clipped()
 
                 if isSplit {
                     SplitHandle(fraction: $fraction, totalHeight: totalHeight)
 
                     bottom
-                        .frame(height: bottomHeight)
+                        .frame(height: bottomHeight, alignment: .top)
+                        .clipped()
                 }
             }
             .frame(height: totalHeight)
