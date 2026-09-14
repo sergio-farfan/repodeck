@@ -43,4 +43,6 @@ Run Swift tests directly without truncating their output with pipes. Add regress
 
 Use focused conventional commit subjects and the contributor's configured Git identity. Never commit credentials, personal settings, private repository data, `.build/`, app bundles, or installers. Describe actual validation and remaining limitations in pull requests.
 
+Use Sergio Farfan's existing Git identity for new agent-assisted work. Never add AI author headers, AI authorship notices, or AI `Co-authored-by` trailers to files or commits.
+
 Follow [docs/releasing.md](docs/releasing.md). Release builds require clean source and exact local/remote tag equality with the checkout. Never move release tags or replace existing release assets automatically. Draft preparation does not imply approval to publish a release or provision signing credentials; follow the maintainer's explicit instructions for those actions.

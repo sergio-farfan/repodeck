@@ -73,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
-        if let url = Bundle.module.url(forResource: "AppIcon", withExtension: "icns"),
+        if let url = AppResourceLocator.dockIconURL(),
            let image = NSImage(contentsOf: url) {
             NSApp.applicationIconImage = image
         }

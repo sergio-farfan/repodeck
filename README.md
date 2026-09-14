@@ -16,7 +16,7 @@
 
 Track a few dozen local git repositories and one question gets hard to answer at a glance: which ones have uncommitted work, and which ones are behind their remote and need a pull? Finding out normally means opening each folder, one at a time, just to check. RepoDeck answers it for every tracked repo at once, in a single native window that stays current as files change on disk — no manual refresh, no per-repo client to open.
 
-> **1.10.0 beta preparation:** this checkout contains the combined reliability, workflow, and hosting changes. The beta is being prepared as a draft pending the manual checks in [TESTING.md](TESTING.md). The latest public download remains 1.9.0 and does not include every feature described here.
+> **1.10.1 beta preparation:** this checkout contains the combined reliability, workflow, and hosting changes plus follow-up resource-loading and validation fixes. The beta is being prepared as a draft pending the manual checks in [TESTING.md](TESTING.md). The latest public download remains 1.9.0 and does not include every feature described here.
 
 ## Download
 
@@ -90,7 +90,8 @@ Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are o
 
 | Version | Date | Highlights |
 |---------|------|------------|
-| 1.10.0 beta | Draft preparation | Reliability fixes, commit graph, branches/worktrees, conflict resolver, and GitHub/GitLab reviews; public release pending validation |
+| 1.10.1 beta | Draft preparation | Combined Git-client beta with safer icon loading, clearer review layout, and reliable timeout diagnostics; public release pending validation |
+| 1.10.0 beta | Development draft | Reliability fixes, commit graph, branches/worktrees, conflict resolver, and GitHub/GitLab reviews; followed by 1.10.1 |
 | [1.9.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.9.0) | 2026-07-20 | Hide and restore repositories; sidebar/footer refinements |
 | [1.8.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.8.0) | 2026-07-20 | Per-repository identity footer and sidebar restyle |
 | [1.7.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.7.0) | 2026-07-15 | Hunk staging from the diff view — stage or unstage one hunk at a time |

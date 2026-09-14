@@ -13,6 +13,9 @@ public struct ProcessResult: Sendable {
     public let stderr: String
     public let outputTruncated: Bool
     public let timedOut: Bool
+    /// Internal diagnostics exclude limiter admission and Swift task resumption.
+    /// Populated only by a real subprocess, from successful spawn through reaping.
+    var executionDuration: Duration?
 
     public init(exitCode: Int32, stdout: Data, stderr: String, outputTruncated: Bool, timedOut: Bool = false) {
         self.exitCode = exitCode
@@ -20,6 +23,7 @@ public struct ProcessResult: Sendable {
         self.stderr = stderr
         self.outputTruncated = outputTruncated
         self.timedOut = timedOut
+        self.executionDuration = nil
     }
 }
 
@@ -264,6 +268,7 @@ private func runJob(
             }
         }
     }
+    let launched = ContinuousClock.now
     // Parent never retains the write ends of the child's output pipes.
     for fd in [out.1, err.1, inputPipe?.0 ?? nullFD] {
         var fd = fd
@@ -373,9 +378,12 @@ private func runJob(
     kill(-pid, SIGKILL)
     var status: Int32 = 0
     while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+    let reaped = ContinuousClock.now
     if control.state.withLock({ $0.cancelled }) { throw CancellationError() }
-    return ProcessResult(exitCode: childExit ?? 0, stdout: stdout, stderr: String(decoding: stderr, as: UTF8.self),
-                         outputTruncated: truncated || control.state.withLock { $0.outputLimited }, timedOut: timedOut)
+    var result = ProcessResult(exitCode: childExit ?? 0, stdout: stdout, stderr: String(decoding: stderr, as: UTF8.self),
+                               outputTruncated: truncated || control.state.withLock { $0.outputLimited }, timedOut: timedOut)
+    result.executionDuration = launched.duration(to: reaped)
+    return result
 }
 
 private func posixError(_ code: Int32) -> POSIXError { POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }

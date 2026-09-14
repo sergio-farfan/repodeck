@@ -66,11 +66,14 @@ import Testing
             "/bin/sh", arguments: ["-c", "printf ready > \"$1\"; exec /bin/sleep 30", "job", fixture.ready.path],
             timeout: .seconds(10)
         )
+        let completion = ProcessTestCompletion()
         let consumer = Task {
-            for try await _ in job.events { }
+            try await completion.capture {
+                for try await _ in job.events { }
+            }
         }
         defer { consumer.cancel(); job.cancel() }
-        _ = try await fixture.waitUntilReady()
+        try await fixture.waitUntilReady(completion: completion)
         let began = ContinuousClock.now
         consumer.cancel()
         _ = await consumer.result
@@ -111,11 +114,14 @@ import Testing
         let fixture = try ProcessTestFixture()
         defer { fixture.remove() }
         let job = ProcessRunner.startStreaming("/bin/sh", arguments: fixture.cancellationArguments, timeout: .seconds(10))
+        let completion = ProcessTestCompletion()
         let consumer = Task {
-            for try await _ in job.events { }
+            try await completion.capture {
+                for try await _ in job.events { }
+            }
         }
         defer { consumer.cancel(); job.cancel() }
-        _ = try await fixture.waitUntilReady()
+        try await fixture.waitUntilReady(completion: completion)
         try fixture.releaseChild()
         let began = ContinuousClock.now
         consumer.cancel()

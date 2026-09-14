@@ -1,10 +1,51 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import RepoDeckKit
 
-/// Separates time spent waiting for the shared process limiter from execution.
-/// The file timestamp comes from the child, so delayed test-task scheduling
-/// cannot make an already slow command appear to have completed promptly.
+/// A readiness wait must also observe the command: a failed spawn or an early
+/// exit can never produce the marker and must not become a queue-timeout error.
+final class ProcessTestCompletion: Sendable {
+    enum Outcome: Sendable {
+        case completed(exitCode: Int32?, timedOut: Bool)
+        case failed(any Error)
+    }
+    private let state = Mutex<Outcome?>(nil)
+
+    func capture<Value: Sendable>(_ operation: @Sendable () async throws -> Value) async throws -> Value {
+        do {
+            let value = try await operation()
+            let result = value as? ProcessResult
+            state.withLock { $0 = .completed(exitCode: result?.exitCode, timedOut: result?.timedOut ?? false) }
+            return value
+        } catch {
+            state.withLock { $0 = .failed(error) }
+            throw error
+        }
+    }
+
+    func checkStillRunning() throws {
+        guard let outcome = state.withLock({ $0 }) else { return }
+        switch outcome {
+        case .failed(let error): throw error
+        case .completed(let code, let timedOut):
+            throw ProcessReadinessError.exitedBeforeReady(exitCode: code, timedOut: timedOut)
+        }
+    }
+}
+
+enum ProcessReadinessError: Error, Equatable, CustomStringConvertible {
+    case exitedBeforeReady(exitCode: Int32?, timedOut: Bool)
+    var description: String {
+        switch self {
+        case .exitedBeforeReady(let code, let timedOut):
+            "Command finished before signaling readiness (exit: \(code.map(String.init) ?? "stream completed"), timedOut: \(timedOut))"
+        }
+    }
+}
+
+/// Readiness is reserved for tests whose setup must execute inside the child.
+/// Timeout tests use the runner's monotonic execution duration instead.
 struct ProcessTestFixture: Sendable {
     let folder: URL
     var ready: URL { folder.appendingPathComponent("ready") }
@@ -18,16 +59,16 @@ struct ProcessTestFixture: Sendable {
 
     func remove() { try? FileManager.default.removeItem(at: folder) }
 
-    func waitUntilReady() async throws -> Date {
+    func waitUntilReady(completion: ProcessTestCompletion) async throws {
         // The full parallel suite shares six process slots. This bounds queue
         // admission separately; it does not relax the execution/cleanup limit.
         let deadline = ContinuousClock.now.advanced(by: .seconds(30))
         while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < deadline {
+            try completion.checkStillRunning()
             try await Task.sleep(for: .milliseconds(10))
         }
+        if !FileManager.default.fileExists(atPath: ready.path) { try completion.checkStillRunning() }
         try #require(FileManager.default.fileExists(atPath: ready.path), "Child did not signal readiness within the CI queue allowance")
-        let attributes = try FileManager.default.attributesOfItem(atPath: ready.path)
-        return try #require(attributes[.creationDate] as? Date)
     }
 
     /// The descendant itself signals readiness, then waits for the test before
@@ -42,21 +83,21 @@ struct ProcessTestFixture: Sendable {
     static func runMarked(
         script: String,
         timeout: Duration,
-        stdin: Data? = nil
-    ) async throws -> (result: ProcessResult, elapsed: TimeInterval) {
+        stdin: Data? = nil,
+        executable: String = "/bin/sh"
+    ) async throws -> ProcessResult {
         let fixture = try Self()
         defer { fixture.remove() }
+        let completion = ProcessTestCompletion()
         let task = Task {
-            let result = try await ProcessRunner.run(
-                "/bin/sh", arguments: ["-c", script, "job", fixture.ready.path],
-                timeout: timeout, stdin: stdin
-            )
-            return (result, Date())
+            try await completion.capture {
+                try await ProcessRunner.run(executable, arguments: ["-c", script, "job", fixture.ready.path],
+                    timeout: timeout, stdin: stdin)
+            }
         }
         do {
-            let began = try await fixture.waitUntilReady()
-            let (result, completed) = try await task.value
-            return (result, completed.timeIntervalSince(began))
+            try await fixture.waitUntilReady(completion: completion)
+            return try await task.value
         } catch {
             task.cancel()
             _ = await task.result
@@ -150,13 +191,42 @@ struct ProcessTestFixture: Sendable {
     // MARK: - Timeout watchdog
 
     @Test func timeoutKillsHungChildPromptly() async throws {
-        let (result, elapsed) = try await ProcessTestFixture.runMarked(
-            script: "printf ready > \"$1\"; exec /bin/sleep 30",
-            timeout: .milliseconds(200)
-        )
-        #expect(elapsed < 2)
+        let result = try await ProcessRunner.run("/bin/sleep", arguments: ["30"], timeout: .milliseconds(200))
+        let elapsed = try #require(result.executionDuration)
+        #expect(elapsed >= .milliseconds(200))
+        #expect(elapsed < .seconds(2))
         #expect(result.timedOut == true)
         #expect(result.exitCode != 0)
+    }
+
+    @Test func timeoutMayPrecedeTheChildReadinessSignal() async throws {
+        let fixture = try ProcessTestFixture()
+        defer { fixture.remove() }
+        let result = try await ProcessRunner.run("/bin/sh", arguments: [
+            "-c", "sleep 1; printf ready > \"$1\"; exec /bin/sleep 30", "job", fixture.ready.path
+        ], timeout: .milliseconds(200))
+        #expect(result.timedOut)
+        #expect(result.exitCode != 0)
+        let elapsed = try #require(result.executionDuration)
+        #expect(elapsed >= .milliseconds(200))
+        #expect(elapsed < .seconds(2))
+        #expect(!FileManager.default.fileExists(atPath: fixture.ready.path))
+    }
+
+    @Test func readinessWaitPropagatesTheActualSpawnError() async throws {
+        do {
+            _ = try await ProcessTestFixture.runMarked(script: "", timeout: .seconds(10),
+                executable: "/nonexistent/repodeck-readiness-fixture")
+            Issue.record("Expected the spawn failure")
+        } catch let error as POSIXError {
+            #expect(error.code == .ENOENT)
+        }
+    }
+
+    @Test func readinessWaitReportsAnEarlyExitInsteadOfWaitingForAMarker() async {
+        await #expect(throws: ProcessReadinessError.exitedBeforeReady(exitCode: 7, timedOut: false)) {
+            _ = try await ProcessTestFixture.runMarked(script: "exit 7", timeout: .seconds(10))
+        }
     }
 
     @Test func noFalseTimeoutOnQuickCommand() async throws {
@@ -363,29 +433,51 @@ struct ProcessTestFixture: Sendable {
         #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
-    @Test func timeoutTerminatesDescendantsHoldingPipes() async throws {
-        let (result, elapsed) = try await ProcessTestFixture.runMarked(
-            script: "sleep 5 & printf ready > \"$1\"; wait", timeout: .milliseconds(100)
-        )
-        #expect(elapsed < 2)
-        #expect(result.timedOut)
+    @Test func cancellationTerminatesDescendantsHoldingPipes() async throws {
+        let fixture = try ProcessTestFixture()
+        defer { fixture.remove() }
+        let completion = ProcessTestCompletion()
+        let task = Task {
+            try await completion.capture {
+                try await ProcessRunner.run("/bin/sh", arguments: [
+                    "-c", "(printf ready > \"$1\"; exec /bin/sleep 30) & wait", "job", fixture.ready.path
+                ], timeout: .seconds(10))
+            }
+        }
+        defer { task.cancel() }
+        try await fixture.waitUntilReady(completion: completion)
+        let began = ContinuousClock.now
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(began.duration(to: .now) < .seconds(2))
     }
 
     @Test func completedParentCannotLeavePipeHoldingChildren() async throws {
-        let (result, elapsed) = try await ProcessTestFixture.runMarked(
-            script: "sleep 5 & printf ready > \"$1\"; exit 0", timeout: .seconds(4)
-        )
-        #expect(elapsed < 2)
+        let result = try await ProcessRunner.run("/bin/sh", arguments: ["-c", "sleep 5 & exit 0"], timeout: .seconds(4))
+        #expect(try #require(result.executionDuration) < .seconds(2))
         #expect(result.exitCode == 0)
+        #expect(!result.timedOut)
     }
 
-    @Test func timeoutEscalatesForSigtermIgnoringJob() async throws {
-        let (result, elapsed) = try await ProcessTestFixture.runMarked(
-            script: "trap '' TERM; sleep 5 & printf ready > \"$1\"; wait", timeout: .milliseconds(100)
-        )
-        #expect(elapsed < 2)
-        #expect(result.timedOut)
-        #expect(result.exitCode == 9)
+    @Test func cancellationEscalatesForSigtermIgnoringJob() async throws {
+        let fixture = try ProcessTestFixture()
+        defer { fixture.remove() }
+        let completion = ProcessTestCompletion()
+        let task = Task {
+            try await completion.capture {
+                // Both the waiting shell and the descendant inherit ignored
+                // SIGTERM before the descendant signals that it is ready.
+                try await ProcessRunner.run("/bin/sh", arguments: [
+                    "-c", "trap '' TERM; (printf ready > \"$1\"; exec /bin/sleep 30) & wait", "job", fixture.ready.path
+                ], timeout: .seconds(10))
+            }
+        }
+        defer { task.cancel() }
+        try await fixture.waitUntilReady(completion: completion)
+        let began = ContinuousClock.now
+        task.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await task.value }
+        #expect(began.duration(to: .now) < .seconds(2))
     }
 
     @Test func stderrFloodIsBoundedAndStopsTheJob() async throws {
@@ -395,22 +487,26 @@ struct ProcessTestFixture: Sendable {
     }
 
     @Test func nonReadingStdinDoesNotPreventTimeout() async throws {
-        let (result, elapsed) = try await ProcessTestFixture.runMarked(
-            script: "printf ready > \"$1\"; exec /bin/sleep 5",
+        let result = try await ProcessRunner.run("/bin/sleep", arguments: ["5"],
             timeout: .milliseconds(100), stdin: Data(repeating: 0, count: 8_000_000)
         )
-        #expect(elapsed < 2)
+        let elapsed = try #require(result.executionDuration)
+        #expect(elapsed >= .milliseconds(100))
+        #expect(elapsed < .seconds(2))
         #expect(result.timedOut)
     }
 
     @Test func cancellationStopsChildrenBeforeTheirSideEffects() async throws {
         let fixture = try ProcessTestFixture()
         defer { fixture.remove() }
+        let completion = ProcessTestCompletion()
         let task = Task {
-            try await ProcessRunner.run("/bin/sh", arguments: fixture.cancellationArguments, timeout: .seconds(10))
+            try await completion.capture {
+                try await ProcessRunner.run("/bin/sh", arguments: fixture.cancellationArguments, timeout: .seconds(10))
+            }
         }
         defer { task.cancel() }
-        _ = try await fixture.waitUntilReady()
+        try await fixture.waitUntilReady(completion: completion)
         try fixture.releaseChild()
         let began = ContinuousClock.now
         task.cancel()

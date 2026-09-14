@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.1] - Beta draft (2026-09-13)
+
+Follow-up to the combined Git-client beta in 1.10.0; public distribution remains pending the manual release gates.
+
+### Fixed
+
+- Subprocess timeout tests distinguish process execution from queue admission and report early launch/exit failures directly. Readiness-dependent cleanup tests synchronize with the actual child before cancellation.
+- Dock icon loading uses optional app/SwiftPM resource lookup instead of a fatal generated accessor, incorporating the contributor fix in [#1](https://github.com/sergio-farfan/repodeck/pull/1).
+- The review list has a bounded width to reserve more room for review details and actions.
+
 ## [1.10.0] - Beta draft (2026-09-13)
 
 Prepared as a prerelease draft; public distribution is pending the manual release gates below.
@@ -140,7 +150,8 @@ Prepared as a prerelease draft; public distribution is pending the manual releas
 - Sidebar filter and pinning.
 - History list.
 
-[Unreleased]: https://github.com/sergio-farfan/repodeck/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/sergio-farfan/repodeck/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/sergio-farfan/repodeck/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/sergio-farfan/repodeck/compare/v1.9.0...v1.10.0
 [1.3.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.3.0
 [1.2.0]: https://github.com/sergio-farfan/repodeck/releases/tag/v1.2.0
