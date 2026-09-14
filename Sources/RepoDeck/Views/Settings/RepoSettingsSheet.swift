@@ -1,3 +1,4 @@
+import RepoDeckCore
 import RepoDeckKit
 import SwiftUI
 
@@ -45,6 +46,11 @@ struct RepoSettingsSheet: View {
                 }
             }
 
+            Section("Applications") {
+                applicationOverride("Editor", keyPath: \.editorApplicationPath)
+                applicationOverride("Terminal", keyPath: \.terminalApplicationPath)
+            }
+
             Section("Group") {
                 Picker("Group", selection: Binding(
                     get: { model.settings(for: vm.id).group },
@@ -78,8 +84,24 @@ struct RepoSettingsSheet: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(width: 500, height: 640)
         .padding(.vertical, 8)
+    }
+
+    private func applicationOverride(_ label: String, keyPath: WritableKeyPath<RepoSettings, String?>) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(PlatformApplications.displayName(model.settings(for: vm.id)[keyPath: keyPath], fallback: "Use global setting"))
+                .foregroundStyle(.secondary).lineLimit(1)
+            Button("Choose…") {
+                if let path = PlatformApplications.chooseApplication(title: "Choose \(label) for \(vm.repo.name)") {
+                    model.updateSettings(for: vm.id) { $0[keyPath: keyPath] = path }
+                }
+            }.accessibilityLabel("Choose repository \(label.lowercased())")
+            Button("Use Global") { model.updateSettings(for: vm.id) { $0[keyPath: keyPath] = nil } }
+                .disabled(model.settings(for: vm.id)[keyPath: keyPath] == nil)
+        }
     }
 
     /// Trims `newGroupName`, ignores empty/duplicate (case-insensitive)

@@ -3,28 +3,47 @@ set -euo pipefail
 
 # Package dist/RepoDeck.app into a styled, compressed DMG installer.
 #
-# Mechanics borrowed from nosleep's package-dmg.sh: staging layout, a UDRW
-# (writable) image, attach -> osascript Finder layout under a 45s watchdog
-# (a TCC "Automation -> Finder" prompt must never hang packaging) -> detach,
-# then hdiutil convert to a compressed UDZO image.
-#
-# Discipline borrowed from alttab's package-dmg.sh: SIGN_IDENTITY re-signing
-# and a `.sha256` checksum sidecar, plus its changelog-driven release notes
-# for --release.
-#
-# Usage: Scripts/make-dmg.sh [--release]
-# Optional env:
-#   SIGN_IDENTITY  codesigning identity (SHA-1 or common name). If set, the
-#                  app built by bundle.sh (ad-hoc signed) is re-signed with
-#                  it under the hardened runtime before packaging. If unset,
-#                  the app ships with bundle.sh's ad-hoc seal.
+# Usage: Scripts/make-dmg.sh [--release [--prerelease]]
+# --release validates existing local/remote tags and creates a GitHub draft.
+# --prerelease marks that draft as a prerelease and excludes it from latest.
+# Optional environment:
+#   SIGN_IDENTITY  existing Developer ID keychain identity; enables timestamp
+#                  and hardened runtime signing in bundle.sh.
+#   NOTARY_PROFILE existing notarytool keychain profile; requires SIGN_IDENTITY
+#                  and notarizes/staples both app and final disk image.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 RELEASE=0
-if [[ "${1:-}" == "--release" ]]; then
-  RELEASE=1
+PRERELEASE=0
+for argument in "$@"; do
+  case "$argument" in
+    --release) RELEASE=1 ;;
+    --prerelease) PRERELEASE=1 ;;
+    *) echo "Usage: Scripts/make-dmg.sh [--release [--prerelease]]" >&2; exit 2 ;;
+  esac
+done
+if [ "$PRERELEASE" -eq 1 ] && [ "$RELEASE" -ne 1 ]; then
+  echo "--prerelease requires --release." >&2
+  exit 2
+fi
+VER="$(plutil -extract CFBundleShortVersionString raw Support/Info.plist)"
+RELEASE_COMMIT=""
+RELEASE_REPO=""
+if [ "$RELEASE" -eq 1 ]; then
+  RELEASE_COMMIT="$(Scripts/validate-release-tag.sh "v$VER")" || exit $?
+  RELEASE_REPO="$(git remote get-url origin)"
+  command -v gh >/dev/null || { echo "GitHub CLI is required for --release" >&2; exit 1; }
+  # Refuse existing releases instead of replacing published binaries.
+  if gh release view "v$VER" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+    echo "Release v$VER already exists. Bump the version; assets are never replaced." >&2
+    exit 1
+  fi
+fi
+if [ -n "${NOTARY_PROFILE:-}" ] && [ -z "${SIGN_IDENTITY:-}" ]; then
+  echo "NOTARY_PROFILE requires a Developer ID SIGN_IDENTITY." >&2
+  exit 1
 fi
 
 APP_NAME="RepoDeck"
@@ -35,13 +54,20 @@ VOL_NAME="RepoDeck"
 echo "==> Building ${APP_BUNDLE}..."
 Scripts/bundle.sh
 
-if [ -n "${SIGN_IDENTITY:-}" ]; then
-  echo "==> Re-signing with SIGN_IDENTITY ($SIGN_IDENTITY)..."
-  codesign --force --deep -s "$SIGN_IDENTITY" --options runtime "$APP_BUNDLE"
-  codesign --verify --strict --verbose=2 "$APP_BUNDLE"
+# Notarize and staple the app before it is placed in the image. The profile
+# refers to credentials already stored by the developer in their keychain.
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+  NOTARY_DIR="$(mktemp -d -t repodeck-notary)"
+  NOTARY_ZIP="$NOTARY_DIR/RepoDeck.zip"
+  trap 'rm -rf "$NOTARY_DIR"' EXIT
+  ditto -c -k --keepParent "$APP_BUNDLE" "$NOTARY_ZIP"
+  xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP_BUNDLE"
+  xcrun stapler validate "$APP_BUNDLE"
+  rm -rf "$NOTARY_DIR"
+  trap - EXIT
 fi
 
-VER="$(plutil -extract CFBundleShortVersionString raw Support/Info.plist)"
 DMG_FINAL="$DIST/${APP_NAME}-${VER}.dmg"
 DMG_TMP="$DIST/${APP_NAME}-tmp.dmg"
 
@@ -56,8 +82,11 @@ cleanup() {
   fi
   rm -rf "$STAGING"
   rm -f "$DMG_TMP"
+  if [ -n "${NOTES:-}" ]; then rm -f "$NOTES"; fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 cp -R "$APP_BUNDLE" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
@@ -81,7 +110,7 @@ sleep 2
 
 echo "==> Applying Finder layout (best effort -- needs Automation -> Finder permission)..."
 apply_layout() {
-    osascript <<APPLESCRIPT
+    exec osascript <<APPLESCRIPT
 tell application "Finder"
     tell disk "${VOL_NAME}"
         open
@@ -132,6 +161,15 @@ rm -f "$DMG_TMP"
 echo "==> Verifying..."
 hdiutil verify "$DMG_FINAL"
 
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_FINAL"
+fi
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+  xcrun notarytool submit "$DMG_FINAL" --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$DMG_FINAL"
+  xcrun stapler validate "$DMG_FINAL"
+fi
+
 echo "==> Writing checksum..."
 ( cd "$DIST" && shasum -a 256 "$(basename "$DMG_FINAL")" | tee "$(basename "$DMG_FINAL").sha256" )
 
@@ -144,10 +182,21 @@ if [ "$RELEASE" -eq 1 ]; then
     {
         echo ""
         echo "---"
-        echo "### Unsigned build"
-        echo "Not yet notarized. On first launch, right-click **RepoDeck.app -> Open**, or clear quarantine:"
+        echo "Source commit: $RELEASE_COMMIT"
+        if [ "$PRERELEASE" -eq 1 ]; then
+          echo "Channel: prerelease (beta); excluded from latest downloads."
+        fi
+        echo "Architecture: universal (Apple silicon and Intel)."
         echo ""
-        echo "    xattr -dr com.apple.quarantine /Applications/RepoDeck.app"
+        if [ -n "${NOTARY_PROFILE:-}" ]; then
+          echo "Developer ID signed and notarized."
+        else
+          echo "### Development build"
+          echo "Not notarized. Review the signing status before publishing this draft."
+        fi
+        echo ""
+        echo 'Build toolchain:'
+        swift --version
     } >> "$NOTES"
 
     SHA="$DMG_FINAL.sha256"
@@ -156,9 +205,15 @@ if [ "$RELEASE" -eq 1 ]; then
     # (the versioned name changes every release and would break it).
     DMG_STABLE="$(dirname "$DMG_FINAL")/RepoDeck.dmg"
     cp "$DMG_FINAL" "$DMG_STABLE"
-    if gh release view "v$VER" >/dev/null 2>&1; then
-        gh release upload "v$VER" "$DMG_FINAL" "$SHA" "$DMG_STABLE" --clobber
-    else
-        gh release create "v$VER" "$DMG_FINAL" "$SHA" "$DMG_STABLE" --title "RepoDeck $VER" --notes-file "$NOTES"
+    # Recheck immediately before upload in case the checkout or remote tag
+    # changed during packaging. gh must use that existing tag, never auto-tag.
+    # Explicit failure handling also works with macOS Bash 3.2, whose
+    # errexit behavior does not reliably stop on a failed [[ ... ]] test.
+    Scripts/validate-release-tag.sh "v$VER" "$RELEASE_COMMIT" >/dev/null || exit $?
+    RELEASE_OPTIONS=(--repo "$RELEASE_REPO" --verify-tag --draft --title "RepoDeck $VER" --notes-file "$NOTES")
+    if [ "$PRERELEASE" -eq 1 ]; then
+      RELEASE_OPTIONS+=(--prerelease --latest=false)
     fi
+    gh release create "v$VER" "$DMG_FINAL" "$SHA" "$DMG_STABLE" "${RELEASE_OPTIONS[@]}"
+    echo "Draft release created. Verify its assets and signing status before publication."
 fi

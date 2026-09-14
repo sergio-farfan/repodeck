@@ -21,6 +21,15 @@ public enum DiffParser {
     /// file" flags the PRECEDING emitted line. Unknown lines outside a hunk
     /// are skipped (forward-compat). Empty input -> [].
     public static func parse(_ output: String) -> [FileDiff] {
+        parse(output, isLosslessUTF8: true)
+    }
+
+    public static func parse(_ output: Data) -> [FileDiff] {
+        let lossless = String(data: output, encoding: .utf8)
+        return parse(lossless ?? String(decoding: output, as: UTF8.self), isLosslessUTF8: lossless != nil)
+    }
+
+    private static func parse(_ output: String, isLosslessUTF8: Bool) -> [FileDiff] {
         guard !output.isEmpty else { return [] }
 
         var files: [FileDiff] = []
@@ -28,6 +37,8 @@ public enum DiffParser {
         var oldPath: String?
         var newPath: String?
         var isBinary = false
+        var oldMode: String?
+        var newMode: String?
         var hunks: [Hunk] = []
         var hasOpenFile = false
 
@@ -54,11 +65,14 @@ public enum DiffParser {
         func finalizeFile() {
             finalizeHunk()
             if hasOpenFile, let old = oldPath, let new = newPath {
-                files.append(FileDiff(oldPath: old, newPath: new, isBinary: isBinary, hunks: hunks))
+                files.append(FileDiff(oldPath: old, newPath: new, isBinary: isBinary, hunks: hunks,
+                                      oldMode: oldMode, newMode: newMode, isLosslessUTF8: isLosslessUTF8))
             }
             oldPath = nil
             newPath = nil
             isBinary = false
+            oldMode = nil
+            newMode = nil
             hunks = []
             hasOpenFile = false
         }
@@ -86,6 +100,22 @@ public enum DiffParser {
             // covers between-hunk gaps too; git never re-emits a header line
             // after the first `@@`.
             if hunkHeader == nil, hunks.isEmpty {
+                if rawLine.hasPrefix("new file mode ") {
+                    newMode = String(rawLine.dropFirst(14))
+                } else if rawLine.hasPrefix("deleted file mode ") {
+                    oldMode = String(rawLine.dropFirst(18))
+                } else if rawLine.hasPrefix("old mode ") {
+                    oldMode = String(rawLine.dropFirst(9))
+                } else if rawLine.hasPrefix("new mode ") {
+                    newMode = String(rawLine.dropFirst(9))
+                } else if rawLine.hasPrefix("index ") {
+                    let fields = rawLine.split(separator: " ")
+                    if fields.count == 3 { oldMode = String(fields[2]); newMode = String(fields[2]) }
+                } else if rawLine.hasPrefix("rename from ") || rawLine.hasPrefix("copy from ") {
+                    oldPath = GitPathCodec.decode(String(rawLine.dropFirst(rawLine.hasPrefix("rename") ? 12 : 10)))
+                } else if rawLine.hasPrefix("rename to ") || rawLine.hasPrefix("copy to ") {
+                    newPath = GitPathCodec.decode(String(rawLine.dropFirst(rawLine.hasPrefix("rename") ? 10 : 8)))
+                }
                 if rawLine.hasPrefix("--- ") {
                     oldPath = parsePathLine(rawLine, prefixLength: 4)
                     continue
@@ -160,25 +190,31 @@ public enum DiffParser {
     // MARK: - Line parsing helpers
 
     /// Extracts `(old, new)` from a `diff --git a/<old> b/<new>` line. This
-    /// is the sole path source for pure renames/copies (no content change)
-    /// and binary files, where "--- "/"+++ " are absent. Splits on the
-    /// first " b/" — ambiguous if a path itself contains that literal
-    /// substring, an accepted limitation of this fallback.
+    /// is a fallback when ---/+++ headers are absent. Rename/copy headers
+    /// override it; equal paths disambiguate ordinary binary modifications.
     private static func parseDiffGitLine(_ line: String) -> (old: String, new: String)? {
         let prefix = "diff --git "
         guard line.hasPrefix(prefix) else { return nil }
-        let rest = line.dropFirst(prefix.count)
-        guard let separatorRange = rest.range(of: " b/") else { return nil }
-        let oldPart = rest[rest.startIndex..<separatorRange.lowerBound]
-        let newPart = rest[separatorRange.upperBound...]
-        guard oldPart.hasPrefix("a/") else { return nil }
-        return (String(oldPart.dropFirst(2)), String(newPart))
+        let rest = String(line.dropFirst(prefix.count))
+        var pairs: [(String, String)] = []
+        // A separator is a space before the new b/ path, optionally quoted.
+        // Decoding each candidate also validates the quoted old side.
+        for index in rest.indices where rest[index] == " " {
+            let right = String(rest[rest.index(after: index)...])
+            guard right.hasPrefix("b/") || right.hasPrefix("\"b/") else { continue }
+            guard let old = GitPathCodec.decode(String(rest[..<index])),
+                  let new = GitPathCodec.decode(right), old.hasPrefix("a/"), new.hasPrefix("b/") else { continue }
+            pairs.append((String(old.dropFirst(2)), String(new.dropFirst(2))))
+        }
+        return pairs.first(where: { $0.0 == $0.1 }) ?? pairs.first
     }
 
     /// Strips a 4-char prefix ("--- "/"+++ ") and then the "a/"/"b/" marker,
     /// except for the verbatim "/dev/null" (no prefix to strip).
-    private static func parsePathLine(_ line: String, prefixLength: Int) -> String {
-        let rest = String(line.dropFirst(prefixLength))
+    private static func parsePathLine(_ line: String, prefixLength: Int) -> String? {
+        let raw = String(line.dropFirst(prefixLength))
+        // Git appends a tab delimiter to unquoted filenames containing spaces.
+        guard let rest = GitPathCodec.decode(raw.hasPrefix("\"") ? raw : String(raw.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)[0])) else { return nil }
         if rest == "/dev/null" { return rest }
         if rest.hasPrefix("a/") || rest.hasPrefix("b/") {
             return String(rest.dropFirst(2))

@@ -1,3 +1,4 @@
+import RepoDeckCore
 import SwiftUI
 
 /// Container for the selected repo's detail pane: an `ErrorBanner` for the
@@ -36,12 +37,7 @@ struct RepoDetailView: View {
                 .inspectorColumnWidth(min: 320, ideal: 460, max: 800)
         }
         .task(id: vm.id) {
-            // Clear any diff left open from a prior visit to this repo, so
-            // switching repos never leaves a stale (or just surprising)
-            // diff inspector open against the newly selected one.
-            vm.diffTarget = nil
-            await vm.refreshLog()
-            await vm.refreshStashes()
+            await vm.refreshForExternalChange()
             if model.isGhAvailable, let gh = model.gh {
                 await vm.refreshPRInfo(using: gh)
             }
@@ -82,17 +78,48 @@ struct RepoDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             ErrorBanner(error: $vm.actionError)
             NoticeBanner(notice: $vm.actionNotice)
-
-            CommitBoxView(vm: vm)
-
             SyncControlsView(vm: vm)
-
+            if vm.operationState != .normal {
+                HStack {
+                    Label(vm.operationState.label, systemImage: "exclamationmark.triangle")
+                    Spacer()
+                    Button("Open Conflicts") { vm.selectedSection = .conflicts }
+                }.padding(10)
+            }
+            ViewThatFits(in: .horizontal) {
+                workspacePicker.pickerStyle(.segmented).fixedSize()
+                workspacePicker.pickerStyle(.menu).fixedSize()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .fixedSize(horizontal: false, vertical: true)
             Divider()
-
-            VerticalSplit(fraction: $changesFraction) {
+            switch vm.selectedSection {
+            case .changes:
+                CommitBoxView(vm: vm)
                 ChangesListView(vm: vm)
-            } bottom: {
-                HistoryListView(vm: vm)
+            case .history: CommitGraphView(vm: vm)
+            case .branches: RepositoryWorkspaceView(vm: vm)
+            case .conflicts: ConflictWorkspaceView(vm: vm)
+            case .reviews:
+                ReviewsView(repoURL: vm.repo.path, gitPath: vm.client.gitPath,
+                            ghPath: model.workflowSettings.ghPath.isEmpty ? nil : model.workflowSettings.ghPath,
+                            glabPath: model.workflowSettings.glabPath.isEmpty ? nil : model.workflowSettings.glabPath,
+                            refreshRevision: vm.refreshRevision,
+                            onCheckout: { path in
+                    model.addFolders([path])
+                    Task { await model.rescan(); model.selectedRepoID = path.resolvingSymlinksInPath().standardizedFileURL.path }
+                })
+                .id(vm.id)
+            }
+        }
+    }
+
+    private var workspacePicker: some View {
+        @Bindable var vm = vm
+        return Picker("Workspace", selection: $vm.selectedSection) {
+            ForEach(RepositorySection.allCases, id: \.self) { section in
+                Text(section == .branches ? "Branches & Worktrees" : section.rawValue).tag(section)
             }
         }
     }

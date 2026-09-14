@@ -1,3 +1,4 @@
+import RepoDeckCore
 import AppKit
 import RepoDeckKit
 import SwiftUI
@@ -43,6 +44,9 @@ struct RepoRowView: View {
         }
         .badge(vm.status?.dirtyCount ?? 0)
         .tag(vm.id)
+        .help(vm.repo.path.path)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(vm.repo.name), \(vm.status?.branch ?? "no branch"), \(vm.status?.dirtyCount ?? 0) changed files, \(vm.status?.ahead ?? 0) commits ahead, \(vm.status?.behind ?? 0) behind\(isWarning ? ", repository needs attention" : "")")
         .contextMenu {
             contextMenuContent
         }
@@ -67,12 +71,6 @@ struct RepoRowView: View {
         if let ahead = status.ahead, ahead > 0 { parts.append("↑\(ahead)") }
         if let behind = status.behind, behind > 0 { parts.append("↓\(behind)") }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
-    }
-
-    /// VS Code's install location if present; the menu item is omitted otherwise.
-    private var vsCodeURL: URL? {
-        let url = URL(fileURLWithPath: "/Applications/Visual Studio Code.app")
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
     @ViewBuilder
@@ -131,29 +129,12 @@ struct RepoRowView: View {
             NSWorkspace.shared.activateFileViewerSelecting([vm.repo.path])
         }
 
-        Button("Open in Terminal") {
-            NSWorkspace.shared.open(
-                [vm.repo.path],
-                withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"),
-                configuration: NSWorkspace.OpenConfiguration(),
-                completionHandler: nil
-            )
-        }
+        Button("Open in Terminal") { model.openInTerminal(vm.repo.path, repoID: vm.id) }
+        Button("Open in Editor…") { model.openInEditor(vm.repo.path, repoID: vm.id) }
 
         Button("Open Command Runner") {
             model.selectedRepoID = vm.id
             vm.isCommandPaneVisible = true
-        }
-
-        if let vsCodeURL {
-            Button("Open in VS Code") {
-                NSWorkspace.shared.open(
-                    [vm.repo.path],
-                    withApplicationAt: vsCodeURL,
-                    configuration: NSWorkspace.OpenConfiguration(),
-                    completionHandler: nil
-                )
-            }
         }
 
         Button("Copy Path") {

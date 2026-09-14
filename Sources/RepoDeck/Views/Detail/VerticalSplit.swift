@@ -96,6 +96,23 @@ private struct SplitHandle: View {
         .frame(maxWidth: .infinity)
         .frame(height: splitHandleHeight)
         .contentShape(Rectangle())
+        .focusable()
+        .accessibilityLabel("Resize upper and lower panes")
+        .accessibilityValue("Upper pane \(Int(fraction * 100)) percent")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: adjust(by: 0.05)
+            case .decrement: adjust(by: -0.05)
+            @unknown default: break
+            }
+        }
+        .onKeyPress(.upArrow) { adjust(by: -0.05); return .handled }
+        .onKeyPress(.downArrow) { adjust(by: 0.05); return .handled }
+        .contextMenu {
+            Button("More Space Above") { adjust(by: 0.1) }
+            Button("Equal Heights") { fraction = 0.5 }
+            Button("More Space Below") { adjust(by: -0.1) }
+        }
         .onHover { inside in
             isHovering = inside
             syncCursor()
@@ -114,7 +131,7 @@ private struct SplitHandle: View {
                     // start), avoiding any per-callback drift.
                     let start = dragStartFraction ?? fraction
                     dragStartFraction = start
-                    let delta = value.translation.height / totalHeight
+                    let delta = value.translation.height / max(totalHeight - splitHandleHeight, 1)
                     fraction = min(max(start + delta, splitMinFraction), splitMaxFraction)
                 }
                 .onEnded { _ in
@@ -137,6 +154,10 @@ private struct SplitHandle: View {
                 cursorPushed = false
             }
         }
+    }
+
+    private func adjust(by amount: Double) {
+        fraction = min(max(fraction + amount, splitMinFraction), splitMaxFraction)
     }
 
     /// Keeps `NSCursor.push()`/`.pop()` in 1:1 balance: pushes once when

@@ -1,3 +1,4 @@
+import RepoDeckCore
 import RepoDeckKit
 import SwiftUI
 
@@ -29,7 +30,7 @@ struct StashSection: View {
             presenting: pendingDrop
         ) { stash in
             Button("Drop", role: .destructive) {
-                Task { await vm.stashDrop(stash.index) }
+                Task { await vm.stashDrop(stash) }
             }
         }
     }
@@ -66,10 +67,10 @@ private struct StashRow: View {
         .contentShape(Rectangle())
         .contextMenu {
             Button("Apply") {
-                Task { await vm.stashApply(stash.index) }
+                Task { await vm.stashApply(stash) }
             }
             Button("Pop") {
-                Task { await vm.stashPop(stash.index) }
+                Task { await vm.stashPop(stash) }
             }
             Button("Drop", role: .destructive) {
                 pendingDrop = stash

@@ -13,16 +13,12 @@ import Testing
     /// fixture setup and inspection, failing the test on non-zero exit.
     @discardableResult
     private func git(_ arguments: [String], in dir: URL) async throws -> ProcessResult {
-        let result = try await ProcessRunner.run(arguments: ["-C", dir.path] + arguments)
+        let result = try await TestGitRepository.run(arguments: ["-C", dir.path] + arguments)
         try #require(result.exitCode == 0, "git \(arguments.joined(separator: " ")) failed: \(result.stderr)")
         return result
     }
 
-    private func configureIdentity(in repo: URL) async throws {
-        try await git(["config", "user.email", "test@example.com"], in: repo)
-        try await git(["config", "user.name", "Test"], in: repo)
-        try await git(["config", "commit.gpgsign", "false"], in: repo)
-    }
+
 
     /// Every `refs/repodeck/undo/*` ref currently present, via
     /// `git for-each-ref` (bypassing `GitClient`, purely for assertions).
@@ -47,18 +43,7 @@ import Testing
     /// temp dir unconditionally. For tests that only exercise ref
     /// bookkeeping and don't need a remote to pull from.
     private func withTempRepo(_ body: (URL, GitClient) async throws -> Void) async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repodeck-undo-test-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        try await git(["init", "-b", "main"], in: root)
-        try await configureIdentity(in: root)
-        try "base\n".write(to: root.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
-        try await git(["add", "-A"], in: root)
-        try await git(["commit", "-m", "chore: base"], in: root)
-
-        try await body(root, GitClient())
+        try await TestGitRepository.withRepository(baseContent: "base\n", body)
     }
 
     /// Creates a bare "remote" seeded with one commit, plus two clones with
@@ -67,33 +52,7 @@ import Testing
     private func withSharedRemote(
         _ body: (_ remote: URL, _ ours: URL, _ theirs: URL, _ client: GitClient) async throws -> Void
     ) async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repodeck-undo-test-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        let seed = root.appendingPathComponent("seed", isDirectory: true)
-        let remote = root.appendingPathComponent("remote.git", isDirectory: true)
-        let ours = root.appendingPathComponent("ours", isDirectory: true)
-        let theirs = root.appendingPathComponent("theirs", isDirectory: true)
-
-        try FileManager.default.createDirectory(at: seed, withIntermediateDirectories: true)
-        try await git(["init", "-b", "main"], in: seed)
-        try await configureIdentity(in: seed)
-        try "base\n".write(to: seed.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
-        try await git(["add", "-A"], in: seed)
-        try await git(["commit", "-m", "chore: base"], in: seed)
-
-        let cloneRemote = try await ProcessRunner.run(arguments: ["clone", "--bare", seed.path, remote.path])
-        try #require(cloneRemote.exitCode == 0, "git clone failed: \(cloneRemote.stderr)")
-        let cloneOurs = try await ProcessRunner.run(arguments: ["clone", remote.path, ours.path])
-        try #require(cloneOurs.exitCode == 0, "git clone failed: \(cloneOurs.stderr)")
-        let cloneTheirs = try await ProcessRunner.run(arguments: ["clone", remote.path, theirs.path])
-        try #require(cloneTheirs.exitCode == 0, "git clone failed: \(cloneTheirs.stderr)")
-        try await configureIdentity(in: ours)
-        try await configureIdentity(in: theirs)
-
-        try await body(remote, ours, theirs, GitClient())
+        try await TestGitRepository.withSharedRemote(body)
     }
 
     // MARK: 1. writeUndoSnapshot records current HEAD as a ref
@@ -239,6 +198,43 @@ import Testing
             await client.discardUndoSnapshot(snapshot, in: repo)
             refs = try await undoRefs(in: repo)
             #expect(refs.isEmpty)
+        }
+    }
+
+    @Test func undoRejectsAnotherBranchAtTheSameCommit() async throws {
+        try await withTempRepo { repo, client in
+            let snapshot = try await client.writeUndoSnapshot(in: repo)
+            try await commitFile("second.txt", content: "second\n", message: "second", in: repo, client: client)
+            let expected = try await client.headOID(in: repo)
+            try await git(["checkout", "-b", "feature"], in: repo)
+            await #expect(throws: GitError.self) {
+                try await client.restoreUndoSnapshot(snapshot, expectedHead: expected, in: repo)
+            }
+            #expect(try await client.headOID(in: repo) == expected)
+            #expect(try await undoRefs(in: repo).contains(snapshot.refName))
+            try await git(["checkout", "--detach", expected], in: repo)
+            await #expect(throws: GitError.self) {
+                try await client.restoreUndoSnapshot(snapshot, expectedHead: expected, in: repo)
+            }
+        }
+    }
+
+    @Test func worktreesAndBranchesKeepIndependentUndoReferences() async throws {
+        try await withTempRepo { repo, client in
+            let first = try await client.writeUndoSnapshot(in: repo)
+            let linked = repo.appendingPathComponent("linked")
+            try await git(["worktree", "add", "-b", "feature", linked.path], in: repo)
+            let linkedSnapshot = try await client.writeUndoSnapshot(in: linked)
+            #expect(first.worktreeGitDir != linkedSnapshot.worktreeGitDir)
+            #expect(Set(try await undoRefs(in: repo)) == [first.refName, linkedSnapshot.refName])
+            await #expect(throws: GitError.self) {
+                try await client.restoreUndoSnapshot(first, expectedHead: first.oid, in: linked)
+            }
+            let replacement = try await client.writeUndoSnapshot(in: repo)
+            #expect(Set(try await undoRefs(in: repo)) == [replacement.refName, linkedSnapshot.refName])
+            try await git(["checkout", "-b", "another"], in: repo)
+            let another = try await client.writeUndoSnapshot(in: repo)
+            #expect(Set(try await undoRefs(in: repo)) == [replacement.refName, linkedSnapshot.refName, another.refName])
         }
     }
 }

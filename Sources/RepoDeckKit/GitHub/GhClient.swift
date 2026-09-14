@@ -36,10 +36,12 @@ public struct GhError: Error, LocalizedError, Sendable {
 public struct GhClient: Sendable {
     public let ghPath: String
 
-    /// Locations `discover()` checks, in order — the same three paths
-    /// `GitDefaults` would need to cover Homebrew (Apple silicon and
-    /// Intel) and a manual install.
-    public static let defaultCandidates = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+    /// Honor the user's PATH before the usual package-manager locations.
+    public static var defaultCandidates: [String] {
+        (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
+            .map { URL(fileURLWithPath: String($0)).appendingPathComponent("gh").path }
+            + ["/opt/homebrew/bin/gh", "/usr/local/bin/gh", "/usr/bin/gh"]
+    }
 
     /// Environment forced on every `gh` invocation: never prompt (there is
     /// no interactive terminal to prompt on), never nag about a CLI update.
@@ -101,40 +103,40 @@ public struct GhClient: Sendable {
         }
     }
 
-    /// `gh pr list --head <branch> --state open --limit 1 --json number,
-    /// title,isDraft,url,reviewDecision,statusCheckRollup`, run in `repo`
-    /// (gh has no `-C`, so this is `workingDirectory`, not an argument).
-    /// Returns nil when there is no open PR for `branch`. Throws `GhError`
-    /// on a non-zero exit or timeout (auth expired, network down, ...) —
-    /// callers are expected to catch this and treat it like "no PR", never
-    /// surface it as a user-facing error.
-    public func pullRequest(forBranch branch: String, in repo: URL) async throws -> PullRequestInfo? {
-        let arguments = [
-            "pr", "list",
-            "--head", branch,
-            "--state", "open",
-            "--limit", "1",
-            "--json", "number,title,isDraft,url,reviewDecision,statusCheckRollup",
-        ]
-        let result = try await ProcessRunner.run(
-            ghPath,
-            arguments: arguments,
-            workingDirectory: repo,
-            environment: Self.environment,
-            priority: .background,
-            timeout: Self.callTimeout
-        )
-        if result.timedOut {
-            throw GhError(
-                command: commandString(arguments),
-                exitCode: result.exitCode,
-                stderr: "timed out after \(Self.callTimeout.components.seconds)s"
-            )
+    /// Compatibility badge API. Resolve the branch's source remote and include
+    /// source repository identity, since unrelated forks can use the same branch.
+    /// The Reviews workspace uses HostingClient directly for explicit remote choice.
+    public func pullRequest(forBranch branch: String, in repo: URL, gitPath: String = GitDefaults.gitPath) async throws -> PullRequestInfo? {
+        let remotes = try await HostingClient.remotes(in: repo, gitPath: gitPath)
+        guard !remotes.isEmpty else { return nil }
+        func config(_ key: String) async throws -> String? {
+            let value = try await ProcessRunner.run(gitPath, arguments: ["-C", repo.path, "config", "--get", key], timeout: .seconds(10))
+            guard value.exitCode == 0 else { return nil }
+            let text = String(decoding: value.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
         }
-        guard result.exitCode == 0 else {
-            throw GhError(command: commandString(arguments), exitCode: result.exitCode, stderr: result.stderr)
-        }
-        return try GhJSONParser.parse(result.stdout)
+        let pushRemote = try await config("branch.\(branch).pushRemote")
+        let defaultPushRemote = try await config("remote.pushDefault")
+        let trackingRemote = try await config("branch.\(branch).remote")
+        let sourceName = pushRemote ?? defaultPushRemote ?? trackingRemote ?? (remotes.contains { $0.name == "origin" } ? "origin" : remotes.count == 1 ? remotes[0].name : "")
+        guard let remote = remotes.first(where: { $0.name == sourceName }),
+              let source = HostingRepository.parse(remote: remote.url, name: remote.name, provider: .github),
+              source.host != "gitlab.com" else { return nil }
+        let targetRemote = remotes.first { $0.name == "upstream" } ?? remote
+        guard let target = HostingRepository.parse(remote: targetRemote.url, name: targetRemote.name, provider: .github),
+              target.host == source.host else { return nil }
+        let api = HostingClient(repository: target, cliPath: ghPath, workingDirectory: repo)
+        let matches = try await api.matching(source: source, branch: branch)
+        guard matches.count == 1, let request = matches.first else { return nil }
+        let detail = try await api.detail(number: request.number)
+        let states = detail.checks.map { $0.status.lowercased() }
+        let rollup: CheckRollup
+        if states.isEmpty { rollup = .none }
+        else if states.contains(where: { ["failure", "failed", "error", "cancelled", "timed_out", "action_required"].contains($0) }) { rollup = .failing }
+        else if states.allSatisfy({ ["success", "passed", "skipped", "neutral"].contains($0) }) { rollup = .passing }
+        else { rollup = .pending }
+        return PullRequestInfo(number: request.number, title: request.title, isDraft: request.isDraft,
+            url: request.url.absoluteString, reviewDecision: nil, checks: rollup)
     }
 
     private func commandString(_ arguments: [String]) -> String {

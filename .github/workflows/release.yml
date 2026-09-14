@@ -1,0 +1,78 @@
+name: Prepare release draft
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing pushed version tag (vX.Y.Z)
+        required: true
+        type: string
+      prerelease:
+        description: Mark the draft as a beta prerelease, excluded from latest
+        required: true
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  resolve:
+    name: Resolve and verify requested tag
+    runs-on: macos-15
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve source commit
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          COMMIT="$(Scripts/validate-release-tag.sh "$RELEASE_TAG")" || exit $?
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+  validate:
+    name: Validate requested source on both architectures
+    needs: resolve
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.resolve.outputs.commit }}
+      release_tag: ${{ inputs.tag }}
+      skip_universal: true
+  package:
+    needs: [resolve, validate]
+    runs-on: macos-15
+    permissions:
+      contents: write
+    environment: release
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      EXPECTED_COMMIT: ${{ needs.resolve.outputs.commit }}
+      PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate requested version and source
+        run: Scripts/validate-release-tag.sh "$RELEASE_TAG" "$EXPECTED_COMMIT"
+      - name: Package and create draft
+        # CI defaults to an ad-hoc signed draft. Developer ID and notarized
+        # builds use the documented local workflow with an existing keychain.
+        run: |
+          options=(--release)
+          if [ "$PRERELEASE" = true ]; then options+=(--prerelease); fi
+          Scripts/make-dmg.sh "${options[@]}"

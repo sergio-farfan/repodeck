@@ -44,6 +44,7 @@ public final class RepoWatcher: @unchecked Sendable {
 
     private var repoEntries: [Entry] = []
     private var rootEntries: [Entry] = []
+    private var metadataEntries: [(key: String, repo: URL)] = []
     private var streamRefs: [FSEventStreamRef] = []
     private var debounce: [String: DispatchWorkItem] = [:]
     private var stopped = false
@@ -71,11 +72,14 @@ public final class RepoWatcher: @unchecked Sendable {
     /// Replaces the watched configuration. `roots` are the tracked folders
     /// (one FSEventStream each); `repoPaths` are the currently-known repo
     /// worktree roots used for longest-prefix event mapping.
-    public func setWatched(roots: [URL], repoPaths: [URL]) {
+    public func setWatched(roots: [URL], repoPaths: [URL], contexts: [RepositoryContext] = []) {
         let rootEntries = roots.map { Entry(key: Self.normalize($0), url: $0) }
         let repoEntries = repoPaths.map { Entry(key: Self.normalize($0), url: $0) }
         queue.async { [weak self] in
             guard let self, !self.stopped else { return }
+            self.metadataEntries = contexts.flatMap { context in
+                [context.gitDir, context.commonGitDir].map { (key: Self.normalize($0), repo: context.worktreeRoot) }
+            }
             self.reconfigure(rootEntries: rootEntries, repoEntries: repoEntries)
         }
     }
@@ -96,8 +100,9 @@ public final class RepoWatcher: @unchecked Sendable {
         // (handles nested repos and nested tracked roots).
         self.rootEntries = rootEntries.sorted { $0.key.count > $1.key.count }
         self.repoEntries = repoEntries.sorted { $0.key.count > $1.key.count }
-        for entry in rootEntries {
-            if let ref = makeStream(forRootPath: entry.key) {
+        let watchedPaths = Set(rootEntries.map(\.key) + repoEntries.map(\.key) + metadataEntries.map(\.key))
+        for path in watchedPaths {
+            if let ref = makeStream(forRootPath: path) {
                 streamRefs.append(ref)
             }
         }
@@ -153,7 +158,7 @@ public final class RepoWatcher: @unchecked Sendable {
     /// C callback. Reconstructs `self` from the unretained `info` pointer and
     /// forwards paths. Runs on `queue` (set via `FSEventStreamSetDispatchQueue`),
     /// so state access inside ``handle(paths:)`` is already serialized.
-    private static let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, _, _ in
+    private static let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, eventFlags, _ in
         guard let info else { return }
         let watcher = Unmanaged<RepoWatcher>.fromOpaque(info).takeUnretainedValue()
         let cPaths = eventPaths.assumingMemoryBound(to: UnsafePointer<CChar>.self)
@@ -162,23 +167,52 @@ public final class RepoWatcher: @unchecked Sendable {
         for i in 0..<numEvents {
             paths.append(String(cString: cPaths[i]))
         }
+        let dropped = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped)
+        if (0..<numEvents).contains(where: { eventFlags[$0] & dropped != 0 }) {
+            for root in watcher.rootEntries { watcher.schedule(.possibleNewRepo(root.url), key: "N:" + root.key) }
+            for repo in watcher.repoEntries { watcher.schedule(.repoChanged(repo.url), key: "R:" + repo.key) }
+        }
         watcher.handle(paths: paths)
     }
 
     // MARK: Event handling (queue-confined — called from `callback`)
 
     private func handle(paths: [String]) {
-        guard !stopped else { return }
+        for mapped in map(paths: paths) {
+            schedule(mapped.event, key: mapped.key)
+        }
+    }
+
+    /// Uses the same mapping as the callback without scheduling emissions.
+    /// Exact-path filtering can therefore be checked independently of the
+    /// additional parent-directory events that FSEvents is allowed to deliver.
+    func events(forPaths paths: [String]) -> [WatchEvent] {
+        queue.sync { map(paths: paths).map(\.event) }
+    }
+
+    private func map(paths: [String]) -> [(event: WatchEvent, key: String)] {
+        guard !stopped else { return [] }
+        var mapped: [(event: WatchEvent, key: String)] = []
         for raw in paths {
-            guard !Self.shouldIgnore(raw) else { continue }
             let path = Self.normalize(URL(fileURLWithPath: raw))
+            let metadata = metadataEntries.filter { Self.path(path, isUnderOrEqualTo: $0.key) }
+            if !metadata.isEmpty {
+                guard URL(fileURLWithPath: path).lastPathComponent != "index.lock" else { continue }
+                for entry in metadata { mapped.append((.repoChanged(entry.repo), "R:" + Self.normalize(entry.repo))) }
+                continue
+            }
 
             if let repo = repoEntries.first(where: { Self.path(path, isUnderOrEqualTo: $0.key) }) {
-                schedule(.repoChanged(repo.url), key: "R:" + repo.key)
+                let relative = String(path.dropFirst(repo.key.count))
+                guard !Self.shouldIgnore(relative, forKnownRepo: true) else { continue }
+                mapped.append((.repoChanged(repo.url), "R:" + repo.key))
             } else if let root = rootEntries.first(where: { Self.path(path, isUnderOrEqualTo: $0.key) }) {
-                schedule(.possibleNewRepo(root.url), key: "N:" + root.key)
+                let relative = String(path.dropFirst(root.key.count))
+                guard !Self.shouldIgnore(relative) else { continue }
+                mapped.append((.possibleNewRepo(root.url), "N:" + root.key))
             }
         }
+        return mapped
     }
 
     /// Trailing debounce: a burst for `key` collapses to one emission ~300 ms
@@ -199,7 +233,7 @@ public final class RepoWatcher: @unchecked Sendable {
 
     /// Drops FSEvents churn that must never trigger a refresh (from VS Code's
     /// git extension ignore list).
-    static func shouldIgnore(_ rawPath: String) -> Bool {
+    static func shouldIgnore(_ rawPath: String, forKnownRepo: Bool = false) -> Bool {
         let components = rawPath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
         // `.git/index.lock` and `.git/worktrees/<x>/index.lock` churn.
@@ -208,7 +242,7 @@ public final class RepoWatcher: @unchecked Sendable {
         }
         for component in components {
             if component.contains(".watchman-cookie") { return true }
-            if prunedNames.contains(component) { return true }
+            if !forKnownRepo && prunedNames.contains(component) { return true }
         }
         return false
     }

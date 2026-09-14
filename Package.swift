@@ -1,4 +1,4 @@
-// swift-tools-version:6.1
+// swift-tools-version:6.2
 import PackageDescription
 
 let package = Package(
@@ -6,11 +6,13 @@ let package = Package(
     platforms: [.macOS(.v15)],
     targets: [
         .target(name: "RepoDeckKit"),
+        .target(name: "RepoDeckCore", dependencies: ["RepoDeckKit"]),
         .executableTarget(
             name: "RepoDeck",
-            dependencies: ["RepoDeckKit"],
+            dependencies: ["RepoDeckKit", "RepoDeckCore"],
             resources: [.copy("Resources/AppIcon.icns")]
         ),
         .testTarget(name: "RepoDeckKitTests", dependencies: ["RepoDeckKit"]),
+        .testTarget(name: "RepoDeckCoreTests", dependencies: ["RepoDeckCore", "RepoDeckKit"]),
     ]
 )

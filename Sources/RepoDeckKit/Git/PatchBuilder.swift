@@ -29,6 +29,15 @@ public enum PatchBuilder {
     /// count), never trusted from the parsed Hunk. `reverse` swaps +/- and
     /// the old/new starts+counts (used for UNSTAGING a hunk from the index).
     public static func patch(for hunk: Hunk, in file: FileDiff, reverse: Bool) -> String {
+        // Compatibility API: an unsupported diff must never produce an
+        // applicable patch. UI callers use checkedPatch for the explanation.
+        (try? checkedPatch(for: hunk, in: file, reverse: reverse)) ?? ""
+    }
+
+    public static func checkedPatch(for hunk: Hunk, in file: FileDiff, reverse: Bool) throws -> String {
+        if let reason = file.hunkActionUnavailableReason {
+            throw GitError(command: "git apply", exitCode: -1, stderr: reason)
+        }
         // Counts from the ORIGINAL (non-reversed) line kinds — the parsed
         // Hunk's own oldCount/newCount are never trusted, since a caller
         // could hand us a hunk whose header no longer matches its lines
@@ -85,23 +94,20 @@ public enum PatchBuilder {
         let isDelete = effectiveNewPath == "/dev/null"
 
         var output: [String] = [
-            "diff --git a/\(realOld) b/\(realNew)",
+            "diff --git \(GitPathCodec.encode("a/" + realOld)) \(GitPathCodec.encode("b/" + realNew))",
         ]
-        // Git needs an explicit mode line for `git apply --cached` to know
-        // whether this hunk adds or removes a file rather than modifying
-        // one. 100644 is the common-case text-file mode; since 8a's
-        // FileDiff carries no mode info, a new EXECUTABLE file staged this
-        // way would land as 100644 — an accepted v1 limitation, not
-        // something to infer here. The same 100644 assumption also makes
-        // UNSTAGING a staged delete of a 100755 file inexact: it leaves a
-        // residual staged mode change (100755 -> 100644) the user didn't
-        // ask for, recoverable via the whole-file unstage control. Carrying
-        // real modes through FileDiff (DiffParser sees the mode header lines)
-        // is the eventual fix.
+        let effectiveOldMode = reverse ? file.newMode : file.oldMode
+        let effectiveNewMode = reverse ? file.oldMode : file.newMode
         if isAdd {
-            output.append("new file mode 100644")
+            guard let effectiveNewMode else {
+                throw GitError(command: "git apply", exitCode: -1, stderr: "Missing new file mode.")
+            }
+            output.append("new file mode \(effectiveNewMode)")
         } else if isDelete {
-            output.append("deleted file mode 100644")
+            guard let effectiveOldMode else {
+                throw GitError(command: "git apply", exitCode: -1, stderr: "Missing old file mode.")
+            }
+            output.append("deleted file mode \(effectiveOldMode)")
         }
         output.append("--- \(headerPath(effectiveOldPath, prefix: "a/"))")
         output.append("+++ \(headerPath(effectiveNewPath, prefix: "b/"))")
@@ -139,6 +145,6 @@ public enum PatchBuilder {
     /// is kept verbatim — it never gets a prefix, matching what `git diff`
     /// itself emits.
     private static func headerPath(_ path: String, prefix: String) -> String {
-        path == "/dev/null" ? path : prefix + path
+        path == "/dev/null" ? path : GitPathCodec.encode(prefix + path)
     }
 }

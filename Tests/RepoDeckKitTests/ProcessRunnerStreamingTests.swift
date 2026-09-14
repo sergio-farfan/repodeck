@@ -60,19 +60,24 @@ import Testing
     }
 
     @Test func cancellationTerminatesPromptlyWithoutHanging() async throws {
+        let fixture = try ProcessTestFixture()
+        defer { fixture.remove() }
+        let job = ProcessRunner.startStreaming(
+            "/bin/sh", arguments: ["-c", "printf ready > \"$1\"; exec /bin/sleep 30", "job", fixture.ready.path],
+            timeout: .seconds(10)
+        )
         let consumer = Task {
-            for try await _ in ProcessRunner.runStreaming("/bin/sh", arguments: ["-c", "sleep 30"]) {
-                // Just drain; the assertion is about how fast this loop ends.
-            }
+            for try await _ in job.events { }
         }
-        try await Task.sleep(for: .milliseconds(100))
+        defer { consumer.cancel(); job.cancel() }
+        _ = try await fixture.waitUntilReady()
+        let began = ContinuousClock.now
         consumer.cancel()
-
-        // Timeout guard: a cancellation-handling bug must not hang the suite.
-        let timedOut = await raced(against: .seconds(5)) {
-            _ = await consumer.result
-        }
-        #expect(timedOut == false)
+        _ = await consumer.result
+        // Ending iteration alone does not prove that the producer reaped the
+        // running process. Bound its cleanup as well as the consumer's exit.
+        await job.waitForCompletion()
+        #expect(began.duration(to: .now) < .seconds(2))
     }
 
     @Test func nonexistentExecutableThrows() async {
@@ -82,22 +87,42 @@ import Testing
     }
 }
 
-/// Runs `operation`, racing it against a timeout. Returns `true` if the
-/// timeout elapsed first (i.e. `operation` did not finish in time), `false`
-/// if `operation` completed first. Used to keep a cancellation bug from
-/// hanging the test suite.
-private func raced(against timeout: Duration, _ operation: @escaping @Sendable () async -> Void) async -> Bool {
-    await withTaskGroup(of: Bool.self) { group in
-        group.addTask {
-            await operation()
-            return false
+@Suite struct ProcessRunnerStreamingSafetyTests {
+    @Test func utf8CharactersSurviveSeparatePipeWrites() async throws {
+        var output = ""
+        for try await event in ProcessRunner.runStreaming("/bin/sh", arguments: ["-c", "printf '\\360\\237'; sleep 0.05; printf '\\230\\200\\n'"]) {
+            if case .output(.stdout, let text) = event { output += text }
         }
-        group.addTask {
-            try? await Task.sleep(for: timeout)
-            return true
+        #expect(output == "😀\n")
+    }
+
+    @Test func outputLimitProducesExplicitError() async throws {
+        var count = 0
+        do {
+            for try await event in ProcessRunner.runStreaming("/bin/sh", arguments: ["-c", "yes x >&2"], maxOutputBytes: 1024) {
+                if case .output(_, let text) = event { count += text.utf8.count }
+            }
+            Issue.record("Expected an output limit error")
+        } catch is ProcessOutputLimitError { }
+        #expect(count <= 1024)
+    }
+
+    @Test func cancelledStreamingJobCannotLeaveChildrenRunning() async throws {
+        let fixture = try ProcessTestFixture()
+        defer { fixture.remove() }
+        let job = ProcessRunner.startStreaming("/bin/sh", arguments: fixture.cancellationArguments, timeout: .seconds(10))
+        let consumer = Task {
+            for try await _ in job.events { }
         }
-        let firstResult = await group.next()!
-        group.cancelAll()
-        return firstResult
+        defer { consumer.cancel(); job.cancel() }
+        _ = try await fixture.waitUntilReady()
+        try fixture.releaseChild()
+        let began = ContinuousClock.now
+        consumer.cancel()
+        _ = await consumer.result
+        await job.waitForCompletion()
+        #expect(began.duration(to: .now) < .seconds(2))
+        try await Task.sleep(for: .milliseconds(1100))
+        #expect(!FileManager.default.fileExists(atPath: fixture.late.path))
     }
 }

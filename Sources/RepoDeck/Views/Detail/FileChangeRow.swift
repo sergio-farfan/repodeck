@@ -1,10 +1,11 @@
+import RepoDeckCore
 import AppKit
 import RepoDeckKit
 import SwiftUI
 
 /// A single changed file: status badge, filename, dimmed path context, and an
 /// optional trailing stage/unstage button. Double-click (or the context
-/// menu's "Open in Editor") opens text files in TextEdit; binary and deleted
+/// menu's "Open in Editor") opens text files in the preferred editor; binary and deleted
 /// files offer no open affordance.
 struct FileChangeRow: View {
     enum Action {
@@ -27,6 +28,7 @@ struct FileChangeRow: View {
     }
 
     @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var model
     let change: FileChange
     let vm: RepoViewModel
     let action: Action?
@@ -35,10 +37,6 @@ struct FileChangeRow: View {
     /// open. Set instantly, then faded out by `flashRow()`.
     @State private var isFlashing = false
 
-    /// TextEdit's fixed system location — same hardcoded-path convention as
-    /// Terminal in RepoRowView.
-    private static let textEditURL = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
-
     /// The file's on-disk URL when it exists, is readable, and sniffs as
     /// text — nil suppresses every open affordance (binaries, deleted or
     /// unreadable files). Does file I/O: reference it only inside the tap
@@ -46,8 +44,9 @@ struct FileChangeRow: View {
     /// never in the row body itself.
     private var editableFileURL: URL? {
         let url = vm.repo.path.appendingPathComponent(change.path)
-        guard let handle = try? FileHandle(forReadingFrom: url),
-              let data = try? handle.read(upToCount: BinarySniffer.sniffLength) else { return nil }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: BinarySniffer.sniffLength) else { return nil }
         return BinarySniffer.isLikelyBinary(data) ? nil : url
     }
 
@@ -85,6 +84,7 @@ struct FileChangeRow: View {
                 .buttonStyle(.borderless)
                 .disabled(vm.isBusy)
                 .help(action.help)
+                .accessibilityLabel("\(action.help) \(change.path)")
             }
         }
         .background(
@@ -92,8 +92,11 @@ struct FileChangeRow: View {
             in: RoundedRectangle(cornerRadius: 4)
         )
         .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(change.path), \(areaLabel), status \(change.statusLetter)")
+        .accessibilityAction(named: "View Diff") { Task { await vm.showDiff(.workingFile(change)) } }
         .onTapGesture(count: 2) {
-            openInTextEdit()
+            openInEditor()
         }
         .contextMenu {
             Button("View Diff") {
@@ -101,20 +104,15 @@ struct FileChangeRow: View {
             }
             if editableFileURL != nil {
                 Button("Open in Editor") {
-                    openInTextEdit()
+                    openInEditor()
                 }
             }
         }
     }
 
-    private func openInTextEdit() {
+    private func openInEditor() {
         guard let url = editableFileURL else { return }
-        NSWorkspace.shared.open(
-            [url],
-            withApplicationAt: Self.textEditURL,
-            configuration: NSWorkspace.OpenConfiguration(),
-            completionHandler: nil
-        )
+        model.openInEditor(url, repoID: vm.id)
         flashRow()
     }
 
@@ -128,6 +126,15 @@ struct FileChangeRow: View {
             withAnimation(.easeOut(duration: 0.5)) {
                 isFlashing = false
             }
+        }
+    }
+
+    private var areaLabel: String {
+        switch change.area {
+        case .staged: "staged"
+        case .unstaged: "unstaged"
+        case .untracked: "untracked"
+        case .unmerged: "conflicted"
         }
     }
 

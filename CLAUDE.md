@@ -1,28 +1,20 @@
-# CLAUDE.md
+# Repository guidance
 
-Guidance for Claude Code sessions in this repo (RepoDeck — native SwiftUI macOS dashboard for the git status of all your local repositories).
+RepoDeck is a native SwiftUI macOS Git client. Read [AGENTS.md](AGENTS.md) for repository-level agent guidance and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution checks.
 
-## Build & Test
+## Build and test
 
-- `swift build` — debug build
-- `swift test` — unit tests (`RepoDeckKitTests`) via the SPM harness in `Package.swift`; run plainly, no output-truncating pipes
-- `swift run RepoDeck` — run from source
-- `Scripts/bundle.sh --open` — build a Release `dist/RepoDeck.app` (ad-hoc signed) and open it
-- `Scripts/make-dmg.sh [--release]` — package `dist/RepoDeck.app` into a styled, compressed DMG + `.sha256` in `dist/` (gitignored; a release asset is canonical). `--release` also publishes/updates the GitHub Release for the current version.
+- `swift build` — debug build of the app and libraries.
+- `swift test` — run the full test suite plainly; do not truncate its output with pipes.
+- Run each `Tests/ReleaseScripts/test-*.sh` script — offline release guard and draft-packaging regressions.
+- `swift run RepoDeck` — run from source.
+- `Scripts/bundle.sh --open` — build a universal development app and open it.
+- `Scripts/make-dmg.sh` — package an installer without publishing.
 
-## Release Process
+The declared baseline is Swift 6.2+, macOS 15+. CI uses Xcode 26.3. See [architecture](docs/architecture.md) and [testing](TESTING.md) before changing subprocess ownership or repository state coordination.
 
-RepoDeck ships local releases (no CI).
+## Releases
 
-1. Bump `CFBundleShortVersionString` and `CFBundleVersion` in `Support/Info.plist`.
-2. Add the new version's section to `CHANGELOG.md` (Keep a Changelog format).
-3. Commit, then `git push origin main` — push BEFORE the next step: `make-dmg.sh --release` creates the `vX.Y.Z` tag on GitHub from the *remote* main head, so an unpushed main yields a release tag pointing at the wrong commit (bit us on v1.8.0; the fix — delete/re-push the tag — flips the release to draft, needing `gh release edit --draft=false`).
-4. `Scripts/make-dmg.sh --release` — builds, signs (ad-hoc unless `SIGN_IDENTITY` is set), packages the DMG, and publishes the GitHub Release with checksummed assets and changelog-derived notes.
-5. `git tag vX.Y.Z && git push origin --tags` (local tag for convenience; the remote one already exists from step 4).
+Follow [docs/releasing.md](docs/releasing.md). A release requires a clean checkout and an existing local/remote `vX.Y.Z` tag equal to HEAD. `--release` creates a draft only and refuses existing releases; it never replaces assets or creates a tag implicitly. Add `--prerelease` for a beta draft excluded from latest. The release workflow validates the same source commit on both Mac architectures before packaging. Signing/notarization use explicitly supplied keychain identities and profiles. Publication and credential provisioning require a separate explicit maintainer request.
 
-**Deviation from the family convention (documented):** alttab publishes releases via a `release.yml` GitHub Actions workflow on `macos-*` runners triggered by `v*` tags. RepoDeck does not have this workflow yet; to adopt it, copy alttab's `.github/workflows/release.yml` and wire `Scripts/make-dmg.sh` in as its packaging step.
-
-## Notes
-
-- Repo-local git identity is `sergio.farfan@gmail.com`.
-- Commits are conventional (`feat:`, `fix:`, `docs:`, `chore:`, ...).
+Do not alter global Git identity. Use the contributor's configured identity for commits and isolated test identities inside fixtures. Prefer focused conventional commit subjects.

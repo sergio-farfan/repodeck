@@ -1,8 +1,9 @@
 import Foundation
 
 /// Parses the output of
-/// `git stash list -z --format=%gd%x1f%gs%x1f%cI`
-/// into `StashEntry` values. Pure function: no `Process`, no I/O.
+/// `git stash list -z --format=%gd%x1f%H%x1f%gs%x1f%cI`
+/// into `StashEntry` values. Legacy records without an OID remain readable,
+/// but must be refreshed before invoking the identity-aware mutation API.
 ///
 /// Unlike `LogParser`'s `git log` (which self-terminates records with
 /// `%x1e`), `git stash list -z` uses `-z` for NUL-terminated RECORDS —
@@ -26,14 +27,18 @@ public enum StashParser {
                 guard !trimmed.isEmpty else { return nil }
 
                 let fields = trimmed.components(separatedBy: fieldSeparator)
-                guard fields.count == expectedFieldCount else { return nil }
+                guard fields.count >= expectedFieldCount else { return nil }
 
                 guard let index = index(fromSelector: fields[0]) else { return nil }
 
+                let hasOID = fields.count >= 4 && [40, 64].contains(fields[1].count)
+                    && fields[1].allSatisfy { $0.isHexDigit }
+                guard hasOID || fields.count == 3 else { return nil }
                 return StashEntry(
                     index: index,
-                    subject: fields[1],
-                    date: dateFormatter.date(from: fields[2])
+                    subject: fields[(hasOID ? 2 : 1)..<(fields.count - 1)].joined(separator: fieldSeparator),
+                    date: dateFormatter.date(from: fields[fields.count - 1]),
+                    oid: hasOID ? fields[1] : nil
                 )
             }
     }
@@ -43,6 +48,7 @@ public enum StashParser {
     private static func index(fromSelector selector: String) -> Int? {
         guard selector.hasPrefix("stash@{"), selector.hasSuffix("}") else { return nil }
         let inner = selector.dropFirst("stash@{".count).dropLast()
-        return Int(inner)
+        guard let index = Int(inner), index >= 0 else { return nil }
+        return index
     }
 }

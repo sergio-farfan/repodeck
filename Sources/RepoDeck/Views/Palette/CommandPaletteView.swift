@@ -1,3 +1,4 @@
+import RepoDeckCore
 import AppKit
 import RepoDeckKit
 import SwiftUI
@@ -100,18 +101,30 @@ struct CommandPaletteView: View {
                     .foregroundStyle(.secondary)
                     .padding(12)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                            row(item, isSelected: index == selectionIndex)
-                                .onTapGesture {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                                Button {
                                     selectionIndex = index
                                     runSelected()
-                                }
+                                } label: { row(item, isSelected: index == selectionIndex) }
+                                .buttonStyle(.plain)
+                                .id(item.id)
+                                .accessibilityLabel(item.title)
+                            }
                         }
                     }
+                    .frame(maxHeight: rowHeight * CGFloat(min(items.count, maxVisibleRows)))
+                    .onChange(of: selectionIndex) {
+                        if items.indices.contains(selectionIndex) { proxy.scrollTo(items[selectionIndex].id) }
+                    }
+                    .onChange(of: items.map(\.id)) {
+                        selectionIndex = min(selectionIndex, max(items.count - 1, 0))
+                        if items.indices.contains(selectionIndex) { proxy.scrollTo(items[selectionIndex].id) }
+                    }
                 }
-                .frame(maxHeight: rowHeight * CGFloat(min(items.count, maxVisibleRows)))
+
             }
         }
         .background(.regularMaterial)
@@ -209,13 +222,12 @@ struct CommandPaletteView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([vm.repo.path])
                 close()
             }),
+            PaletteItem(id: "selected-editor", kind: .action, title: "Open in Editor — \(name)", subtitle: nil, run: {
+                model.openInEditor(vm.repo.path, repoID: vm.id)
+                close()
+            }),
             PaletteItem(id: "selected-terminal", kind: .action, title: "Open in Terminal — \(name)", subtitle: nil, run: {
-                NSWorkspace.shared.open(
-                    [vm.repo.path],
-                    withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"),
-                    configuration: NSWorkspace.OpenConfiguration(),
-                    completionHandler: nil
-                )
+                model.openInTerminal(vm.repo.path, repoID: vm.id)
                 close()
             }),
         ]

@@ -5,6 +5,29 @@ All notable changes to RepoDeck will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Combined Git-client beta: commit graph and pagination, branch/tracking/worktree management, text conflict resolution with separate save/stage actions, and GitHub/GitLab review workspaces.
+- Configurable Git/hosting executables and editor/terminal preferences with repository overrides; attention filters and keyboard-accessible controls.
+- Testable `RepoDeckCore` application state, shared mutation coordination, isolated Git fixtures, macOS CI, and universal signing/notarization support.
+
+### Fixed
+
+- Lossy partial staging, text-converted/colorized diffs, unsupported file modes, literal/quoted paths, rename and unborn-branch unstaging.
+- Stale stash selection, branch/worktree-scoped undo, stale diff and operation previews, and external worktree/metadata refreshes.
+- Worktree removal now refuses untracked or ignored files, including local `.env` files that Git's normal clean-status check can overlook.
+- Subprocess queue cancellation, child cleanup, pipe-drain bounds, rescan ordering, newer draft preservation, review refresh replacement, and skipped bulk outcomes.
+- Cancelled commands retain the shared repository lock until their process group exits; branch and worktree confirmations reject externally changed targets.
+- Review refresh rediscovers changed remotes and preserves drafts by destination; fork pull requests include head and test-merge checks from the destination repository, with stale results rejected.
+- Release source/tag verification and asset replacement; releases now require matching existing tags and are prepared as drafts, with an explicit beta prerelease option and validation on both Mac architectures before CI packaging.
+
+### Beta limits
+
+- Live hosting permissions/protection, VoiceOver/appearance acceptance, Developer ID notarization, and downloaded-installer checks remain release gates; see `TESTING.md`.
+- Interactive rebase editing, inline threaded-review editing, issue tracking, and non-macOS ports remain later milestones.
+
 ## [1.9.0] - 2026-07-20
 
 ### Added

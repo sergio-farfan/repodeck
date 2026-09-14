@@ -11,22 +11,7 @@ import Testing
     /// stable, non-interactive identity, runs `body` against it, then
     /// removes the temp dir unconditionally.
     private func withTempRepo(_ body: (URL, GitClient) async throws -> Void) async throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("repodeck-stash-test-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-
-        _ = try await ProcessRunner.run(arguments: ["init", "-b", "main"], workingDirectory: root)
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.email", "test@example.com"])
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "user.name", "Test"])
-        _ = try await ProcessRunner.run(arguments: ["-C", root.path, "config", "commit.gpgsign", "false"])
-
-        let client = GitClient()
-        try "base\n".write(to: root.appendingPathComponent("base.txt"), atomically: true, encoding: .utf8)
-        try await client.stageAll(in: root)
-        try await client.commit(message: "chore: base", in: root)
-
-        try await body(root, client)
+        try await TestGitRepository.withRepository(baseContent: "base\n", body)
     }
 
     // MARK: 1. push (tracked change only) clears the dirty tree and appears in the list
@@ -189,6 +174,40 @@ import Testing
             } catch let error as GitError {
                 #expect(error.exitCode != 0)
             }
+        }
+    }
+
+    @Test func selectedStashKeepsItsIdentityAfterNewStashesShiftIndices() async throws {
+        try await withTempRepo { repo, client in
+            let path = repo.appendingPathComponent("base.txt")
+            try Data("selected\n".utf8).write(to: path)
+            try await client.stashPush(message: "selected", includeUntracked: false, in: repo)
+            let selected = try #require(try await client.stashList(in: repo).first)
+            #expect(selected.oid != nil)
+            try Data("newer\n".utf8).write(to: path)
+            try await client.stashPush(message: "newer", includeUntracked: false, in: repo)
+            let shifted = try #require(try await client.stashList(in: repo).last)
+            #expect(selected.id == shifted.id)
+            #expect(selected.index != shifted.index)
+            try await client.stashPop(selected, in: repo)
+            #expect(try Data(contentsOf: path) == Data("selected\n".utf8))
+            let remaining = try await client.stashList(in: repo)
+            #expect(remaining.count == 1)
+            #expect(remaining[0].subject.contains("newer"))
+        }
+    }
+
+    @Test func droppingStaleSelectionCannotDropItsReplacement() async throws {
+        try await withTempRepo { repo, client in
+            let path = repo.appendingPathComponent("base.txt")
+            try Data("selected\n".utf8).write(to: path)
+            try await client.stashPush(message: "selected", includeUntracked: false, in: repo)
+            let selected = try #require(try await client.stashList(in: repo).first)
+            try await client.stashDrop(selected, in: repo)
+            try Data("replacement\n".utf8).write(to: path)
+            try await client.stashPush(message: "replacement", includeUntracked: false, in: repo)
+            await #expect(throws: GitError.self) { try await client.stashDrop(selected, in: repo) }
+            #expect(try await client.stashList(in: repo).count == 1)
         }
     }
 }
