@@ -16,13 +16,13 @@
 
 Track a few dozen local git repositories and one question gets hard to answer at a glance: which ones have uncommitted work, and which ones are behind their remote and need a pull? Finding out normally means opening each folder, one at a time, just to check. RepoDeck answers it for every tracked repo at once, in a single native window that stays current as files change on disk — no manual refresh, no per-repo client to open.
 
-> **[1.10.1 is the latest stable release](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1)**, published September 13, 2026. It includes the combined reliability, Git workflow, and hosting changes plus resource-loading and timeout-diagnostic fixes. See [TESTING.md](TESTING.md) for completed and outstanding validation.
+> **[1.11.0 is the latest stable release](https://github.com/sergio-farfan/repodeck/releases/tag/v1.11.0)**, published September 14, 2026. It adds searchable offline Help and in-app commit-author setup, makes errors readable with useful next steps, and fixes the reported diff-window crash on macOS 27. See [TESTING.md](TESTING.md) for completed and outstanding validation.
 
 ## Download
 
 **[Download RepoDeck.dmg →](https://github.com/sergio-farfan/repodeck/releases/latest/download/RepoDeck.dmg)** (direct download; or browse the [latest release](https://github.com/sergio-farfan/repodeck/releases/latest))
 
-Open the `.dmg` and drag **RepoDeck** to **Applications**.
+Open the `.dmg` and drag **RepoDeck** to **Applications**. When updating, quit the running app before replacing it, then reopen RepoDeck.
 
 <!-- UNSIGNED-NOTE: remove this block once notarized builds ship. -->
 > RepoDeck releases are **ad-hoc signed and not notarized**. After attempting to open a trusted download and verifying its checksum, you may need **System Settings → Privacy & Security → Open Anyway**. See [Apple's first-launch instructions](https://support.apple.com/en-lamr/102445). Developer ID signing and notarization are optional future improvements, not release requirements.
@@ -43,9 +43,10 @@ Prefer to build it yourself? See [Build from source](#build-from-source).
 
 - **Folder tracking and worktree discovery** — track any number of folders; RepoDeck walks each one recursively (up to 8 levels deep), skipping dependency/build folders, then expands Git’s registered worktrees. Linked siblings outside the tracked folder and nested registered worktrees appear separately. Bare repositories are discovery sources for their checkouts, rather than editable working directories.
 - **Live FSEvents status** — sidebar badges, ahead/behind counts, and the uncommitted-changes indicator update the moment something changes on disk, with no polling.
-- **Stage, commit, pull, push, fetch** — stage or unstage individual files, "Stage All", commit with ⌘⏎, and pull/push/fetch the selected repo from the buttons under the commit box.
+- **Stage, commit, pull, push, fetch** — stage or unstage individual files, "Stage All", commit with ⌘⏎, and pull/push/fetch the selected repo from the action row above the workspace.
 - **Bulk Fetch All / Pull All** — fetch or pull every tracked repo at once, with a toolbar progress readout and explicit success, failure, and skipped counts. Busy repositories are reported as skipped.
-- **Diff view with hunk staging** — right-click a changed file or a commit in History and choose **View Diff**: a unified diff opens in a side inspector with per-file headers (renames as `old → new`), hunk headers, an old/new line-number gutter, and tinted additions and deletions. Binary files are labeled, conflicted files prompt you to resolve first, and very large diffs are capped rather than hanging. Eligible hunks have Stage or Unstage controls. Non-UTF-8 content, unknown or changed modes, symlinks, submodules, and renames require a whole-file operation with a visible explanation. Displayed hunks are revalidated before writing; commit diffs are read-only.
+- **Diff view with hunk staging** — right-click a changed file or a commit in History and choose **View Diff**: a unified diff opens in a resizable diff pane with per-file headers (renames as `old → new`), hunk headers, an old/new line-number gutter, and tinted additions and deletions. Binary files are labeled, conflicted files prompt you to resolve first, and very large diffs are capped rather than hanging. Eligible hunks have Stage or Unstage controls. Non-UTF-8 content, unknown or changed modes, symlinks, submodules, and renames require a whole-file operation with a visible explanation. Displayed hunks are revalidated before writing; commit diffs are read-only.
+- **Commit author setup** — choose **Configure Author…** under **Commit author** in the sidebar, or **Configure Commit Author…** in Repository Settings to set your default name and email for one repository or Git on this Mac. The app shows the author Git resolves for ordinary new commits, including author-specific and environment overrides, and distinguishes read errors from missing settings. SSH access and the GitHub account are shown separately; cherry-pick and rebase normally preserve the original commit author.
 - **Auto-rebase on rejected push (per repo)** — right-click a repo and enable **Auto-Rebase on Rejected Push**: when a push is rejected because the remote has new commits, RepoDeck runs `git pull --rebase --autostash` and retries the push once, then shows a dismissible notice. If the rebase conflicts, RepoDeck attempts to abort it; conflicts or a retained autostash may still require recovery. Off by default for every repo.
 - **Per-repo auto-fetch** — set a fetch interval (5/15/30/60 minutes) per repo in Repository Settings; RepoDeck fetches quietly in the background and keeps ahead/behind counts current. Background fetch failures have a visible status explanation. Fetches use a capped background lane; interactive requests have queue priority, and writes sharing Git metadata are serialized.
 - **Repo groups** — organize repos into named sidebar sections, assigned from Repository Settings or right-click → **Move to Group**. Pinned repos always stay in the Pinned section, so a group's section appears once it has at least one unpinned member.
@@ -56,7 +57,7 @@ Prefer to build it yourself? See [Build from source](#build-from-source).
 - **GitHub PR/CI badges** — the optional sync-bar badge matches both the source repository/fork and branch, with distinct passing/failing/pending check symbols and browser navigation. The separate Reviews workspace handles detailed hosting operations.
 - **GitHub and GitLab Reviews** — select an explicit remote and provider; authentication stays in `gh`/`glab` and is checked for that host/account. Browse paginated open pull/merge requests, descriptions, changed-file patches, discussion, and checks; create a draft or ready request from an already-pushed source branch; mark drafts ready; comment, approve, or merge using a preview of the account, destination branches, and expected head commit. GitHub additionally supports formal change-request reviews. GitLab currently supports comments and approvals; use its browser UI for formal change requests. The merge method is subject to server permissions, protection, and project configuration.
 - **Isolated review checkout** — fetch a PR/MR into a new detached worktree after verifying the fetched commit matches the preview. The current checkout and its uncommitted files stay in place. Review selection and drafts survive navigation; unsent text is saved locally. A timed-out write is checked against the server before retrying, with stable operation markers to avoid duplicate creation or comments.
-- **Developer tool preferences** — configure Git, `gh`, and `glab` executable paths, choose installed editor/terminal applications, and override applications per repository. Blank optional CLI paths use PATH discovery; files use their macOS default application when no editor is configured. Pane dividers support keyboard/VoiceOver adjustment, and command-palette selection follows keyboard navigation.
+- **Developer tool preferences** — configure Git, `gh`, and `glab` executable paths, choose installed editor/terminal applications, and override applications per repository. Blank optional CLI paths use PATH discovery; files use their macOS default application when no editor is configured. The command pane supports keyboard/VoiceOver divider adjustment, and command-palette selection follows keyboard navigation.
 - **Menu-bar mode** — an optional menu-bar panel (Settings ▸ General) with a repo summary, your pinned and dirtiest repos, and Fetch All / Pull All; click a repo to jump to it in the main window. Off by default.
 - **Repository Settings sheet** — right-click a repo → **Repository Settings…** to set auto-rebase, auto-fetch interval, and group assignment together in one place; changes apply immediately.
 - **Sidebar filter + pinning** — filter the list by repo name or branch, and pin the repos you touch most often into their own section above the rest, alongside any named groups you've set up.
@@ -67,11 +68,25 @@ Prefer to build it yourself? See [Build from source](#build-from-source).
 - **Dashboard attention filters** — show uncommitted changes, conflicts, repositories needing push/pull, or errors. Each worktree retains its selected workspace, drafts, and diff context while navigating.
 - **Themes** (System/Light/Dark), custom accent color, fonts, and font size (⌘,) — a Settings window covers appearance, accent color, UI and monospace font family, and base text size.
 
+## Help and troubleshooting
+
+Choose **Help → RepoDeck Help** for the native offline guide. **⌘?** opens the macOS Help menu/search; choose RepoDeck Help there. Search workflows, control names, or errors; use related topics and back/forward navigation to find the next step. **⌘F** focuses search in the Help window. Topics cover repositories, Git operations, reviews, settings, keyboard navigation, installation, and recovery limits.
+
+Errors stay inside the workspace and offer **Details & Help…** with the complete message, copyable technical details, and relevant next steps, such as opening Conflicts, configuring a commit author, or opening a terminal. Successful bulk operations use a success summary; mixed results offer **Results…** with each repository's outcome. Dismissing a message does not resolve its cause or retry an operation.
+
+### Configure your commit author
+
+Select a repository and choose **Configure Author…** (or **Edit Author…**) at the bottom of the sidebar. Enter the name and email to record on new commits, choose **This repository** or **My Git default**, then choose **Save Commit Author**. The latter applies to Git on this Mac, including other Git apps; repository-specific settings can override it. For GitHub attribution, use an email associated with your GitHub account or its private commit email.
+
+**Author for new commits** shows the identity Git actually resolves, including author-specific configuration and inherited environment overrides. It may differ from the defaults being edited; the form explains that difference after saving. SSH keys and hosting sign-in provide access separately and are not changed by author setup. Existing commits retain their authors, and cherry-pick/rebase normally preserve original authorship.
+
+If the sidebar says **Unavailable**, choose **Retry** or **Configure Author…** to see the diagnostic. The form remains available to repair missing defaults; saving them does not remove an explicit author override. Failed saves preserve your draft and explain when one field may already have been saved.
+
 ## Usage
 
 Add one or more folders — from the toolbar's **Add Folder…** button, or the empty-state prompt on first launch — and RepoDeck recursively discovers every git repository underneath them and lists them in the sidebar, sorted alphabetically, with pinned repos in a section of their own above the rest, followed by one section per group you've created, then the remaining ungrouped repos. Select a repository, then choose **Changes**, **History**, **Branches & Worktrees**, **Conflicts**, or **Reviews**. The workspace selector adapts to narrow windows. The optional command pane can be resized with the pointer or keyboard.
 
-Stage a file from its row, or use **Stage All**; type a commit message and either click **Commit** or press ⌘⏎ while the message field has focus. **Pull**, **Push**, and **Fetch** for the selected repo sit in the top action row, next to an ahead/behind readout and the current upstream. **Fetch All** and **Pull All**, in the toolbar, do the same across every tracked repo at once; a progress bar tracks how many are done, and a dismissible banner reports succeeded, failed, and skipped counts. Right-click a changed file — or a commit in the History pane — and choose **View Diff** to inspect the change as a unified diff in a side inspector — hunks in a working-file diff can be staged or unstaged individually via the button on each hunk header; it closes with its ✕ button and retains its selection per worktree when you navigate. Right-click a repo and choose **Open Command Runner** (or click the terminal button in the sync bar) to dock a command pane under the detail view and run shell commands in that repo's directory.
+Stage a file from its row, or use **Stage All**; type a commit message and either click **Commit** or press ⌘⏎ while the message field has focus. **Pull**, **Push**, and **Fetch** for the selected repo sit in the top action row, next to an ahead/behind readout and the current upstream. **Fetch All** and **Pull All**, in the toolbar, do the same across every tracked repo at once; a progress bar tracks how many are done, and a dismissible banner reports succeeded, failed, and skipped counts. Right-click a changed file — or a commit in the History pane — and choose **View Diff** to inspect the change as a unified diff in a resizable diff pane — hunks in a working-file diff can be staged or unstaged individually via the button on each hunk header; it closes with its ✕ button and retains its selection per worktree when you navigate. Right-click a repo and choose **Open Command Runner** (or click the terminal button in the sync bar) to dock a command pane under the detail view and run shell commands in that repo's directory.
 
 Each sidebar row carries a change-count badge and, when applicable, an ahead/behind readout (↑/↓). A small orange dot next to the branch name flags uncommitted changes sitting on `main` or `master` specifically — a repo you probably don't want to leave dirty. Right-click any repo for Pin/Unpin, the per-repo Auto-Rebase on Rejected Push toggle, Repository Settings… (auto-rebase, auto-fetch, and group in one sheet), Move to Group, Reveal in Finder, Open in Terminal, Open in Editor (your configured application), Copy Path, or, for a repo that's vanished from disk, Remove.
 
@@ -83,6 +98,8 @@ The History search field matches against whichever scope is selected — Message
 | <kbd>⌘</kbd><kbd>R</kbd> | Refresh — rescan all tracked folders |
 | <kbd>⌘</kbd><kbd>,</kbd> | Open Settings — appearance, accent color, fonts, size |
 | <kbd>⌘</kbd><kbd>K</kbd> | Command Palette |
+| <kbd>⌘</kbd><kbd>?</kbd> | Open macOS Help menu/search; select RepoDeck Help |
+| <kbd>⌘</kbd><kbd>F</kbd> | Search within the Help window |
 
 ## Releases & Roadmap
 
@@ -90,6 +107,7 @@ Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are o
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| [1.11.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.11.0) | 2026-09-14 | Offline Help, commit-author setup and accurate author display, readable errors and bulk results, diff-window crash fix |
 | [1.10.1](https://github.com/sergio-farfan/repodeck/releases/tag/v1.10.1) | 2026-09-13 | Commit graph, branches/worktrees, conflict resolver, GitHub/GitLab reviews, reliability fixes, safer icon loading, and clearer review layout |
 | 1.10.0 | Unpublished draft | Superseded by 1.10.1, which includes all of its additions and fixes |
 | [1.9.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.9.0) | 2026-07-20 | Hide and restore repositories; sidebar/footer refinements |
@@ -107,7 +125,7 @@ Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are o
 
 Unordered and undated — priorities shift with real-world use:
 
-- **Manual workflow validation** — complete the outstanding live hosting, accessibility, and clean-machine installation/first-launch checks documented for 1.10.1.
+- **Manual workflow validation** — complete the outstanding live hosting, accessibility, and clean-machine installation/first-launch checks documented in [TESTING.md](TESTING.md).
 - **Optional signing upgrade** — consider Developer ID signing and notarization only if the maintainer later chooses Apple Developer Program membership.
 - **Broader workflow coverage** — keep extending fixtures for worktrees, unusual paths, file modes, hooks, and multi-account hosting.
 - **PR review state on the badge** — surface approved / changes-requested next to the CI dot (already parsed, not yet shown).

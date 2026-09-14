@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-09-14
+
+### Added
+
+- Searchable, offline RepoDeck Help from the native Help menu, with workflow instructions, keyboard shortcuts, troubleshooting, related topics, and recovery limits.
+- In-app commit-author setup from the sidebar, Repository Settings, and author errors. Choose repository or global Git defaults, review the destination, and save explicitly. Drafts survive errors and scope changes; stale configuration and repository state are checked before writing.
+- Scrollable error details with copyable diagnostics and relevant recovery actions, plus per-repository bulk-operation results.
+
+### Fixed
+
+- Error and information messages now occupy bounded workspace rows instead of overlapping the title bar or sidebar. Successful bulk operations no longer appear as warnings, and skipped repositories remain visible in the results.
+- Replaced native diff-inspector presentation to avoid the reproduced AppKit constraint-update loop and crash on macOS 27. The diff pane stays within the detail area, and workspace selection and drafts remain mounted while opening or closing it.
+- The sidebar now asks Git for the author of ordinary new commits, respecting author-specific settings and inherited environment overrides instead of relying only on user.name/user.email. GitHub account information remains separate.
+- Author read failures have visible Configure Author/Retry actions instead of displaying stale details as current. The setup form distinguishes saved defaults from the resolved author and reports unresolved overrides or partial saves honestly.
+
+### Validation
+
+- Development validation passed 389 tests across 28 suites, a universal Apple silicon/Intel build, and strict ad-hoc signature verification. Native checks covered the reported diff crash transitions, bounded messages, Help, commit-author setup, and the compact author footer.
+- Clean-machine installation/first launch, the full accessibility/appearance matrix, and live hosting-write permissions remain outstanding manual checks. See TESTING.md for the exact evidence and limitations. This release uses the standard ad-hoc signed, unnotarized distribution.
+
 ### Documentation
 
 - Restore the established ad-hoc signed, unnotarized GitHub distribution policy. Developer ID signing and notarization are optional; release checks cover the chosen distribution and its first-launch instructions.
