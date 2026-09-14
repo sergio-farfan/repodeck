@@ -11,7 +11,7 @@
 **Native macOS Git client with a dashboard for all your local repositories.**
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="RepoDeck — multi-repo git status dashboard" width="800">
+  <img src="docs/screenshot.png" alt="RepoDeck — history graph and repository sidebar" width="800">
 </p>
 
 Track a few dozen local git repositories and one question gets hard to answer at a glance: which ones have uncommitted work, and which ones are behind their remote and need a pull? Finding out normally means opening each folder, one at a time, just to check. RepoDeck answers it for every tracked repo at once, in a single native window that stays current as files change on disk — no manual refresh, no per-repo client to open.
