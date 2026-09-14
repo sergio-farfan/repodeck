@@ -36,6 +36,16 @@ The standard release is ad-hoc signed and unnotarized. Developer ID signing and 
 
 Record the build commit, macOS/toolchain, scenarios exercised, failures, and outstanding checks in the release notes. Automated fixture tests alone do not validate real credential helpers, accessibility behavior, or Gatekeeper.
 
+## Version 1.11.0 stable release — 2026-09-14
+
+[Version 1.11.0](https://github.com/sergio-farfan/repodeck/releases/tag/v1.11.0) was published as stable/latest at `2026-09-14T07:34:29Z`, using annotated tag `v1.11.0` at `201cc67ce43839f7a6582f62a0390322e5165337`, version 1.11.0/build 14. The implementation and release documentation were committed and pushed to main before tagging.
+
+[Main CI](https://github.com/sergio-farfan/repodeck/actions/runs/34817368090) and the [release workflow](https://github.com/sergio-farfan/repodeck/actions/runs/34817711162) both passed **389 tests across 28 suites on each native Mac architecture**, plus builds, shell syntax checks, resource fixtures, and offline release regressions. The release workflow verified the same existing local/remote tag and source commit before each validation stage and packaging. It built the universal installer with Xcode 26.3 / Swift 6.2.4 using the standard ad-hoc signature. CI reported that Finder layout was applied; its visual appearance was not separately inspected locally.
+
+The draft's three assets were downloaded to a fresh directory before publication. The checksum and disk-image integrity checks passed, and both DMG names were identical. Read-only mounting confirmed app version/build, macOS 15 minimum, arm64/x86_64 slices, strict ad-hoc signature verification, the app icon, and the Applications link. After publication, the unauthenticated evergreen download was fetched and matched the same SHA-256: `ed352820b0a7573613ac9b4362986190771c9c7cccf30dbb94bf3499e069999c`. No existing release tag or asset was moved or replaced.
+
+The distribution is unnotarized. Clean-machine installation/first launch, the full keyboard/VoiceOver/appearance matrix, and live hosting-write permissions remain outstanding manual checks; the development evidence below describes the narrower scenarios actually exercised. These limits are also stated in the published release notes.
+
 ## Git identity setup — development validation, 2026-09-14
 
 The working changes passed **379 tests across 28 suites**, a debug build, and a universal arm64/x86_64 build with Xcode 26.6 / Swift 6.3.3. The refreshed development bundle passed strict ad-hoc signature verification. New regressions cover scoped identity reads/writes, repository overrides, strict UTF-8/input handling, preservation of unrelated configuration, partial saves, cancellation, stale repository/configuration/tool checks, late responses, scope-specific drafts, and identity read failures. Global-write tests use wrapper executables that direct Git to fixture-owned configuration files; they do not modify the developer's global settings.
