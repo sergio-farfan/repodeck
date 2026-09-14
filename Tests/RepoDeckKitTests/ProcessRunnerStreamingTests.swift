@@ -60,45 +60,30 @@ import Testing
     }
 
     @Test func cancellationTerminatesPromptlyWithoutHanging() async throws {
+        let fixture = try ProcessTestFixture()
+        defer { fixture.remove() }
+        let job = ProcessRunner.startStreaming(
+            "/bin/sh", arguments: ["-c", "printf ready > \"$1\"; exec /bin/sleep 30", "job", fixture.ready.path],
+            timeout: .seconds(10)
+        )
         let consumer = Task {
-            for try await _ in ProcessRunner.runStreaming("/bin/sh", arguments: ["-c", "sleep 30"]) {
-                // Just drain; the assertion is about how fast this loop ends.
-            }
+            for try await _ in job.events { }
         }
-        try await Task.sleep(for: .milliseconds(100))
+        defer { consumer.cancel(); job.cancel() }
+        _ = try await fixture.waitUntilReady()
+        let began = ContinuousClock.now
         consumer.cancel()
-
-        // Timeout guard: a cancellation-handling bug must not hang the suite.
-        let timedOut = await raced(against: .seconds(5)) {
-            _ = await consumer.result
-        }
-        #expect(timedOut == false)
+        _ = await consumer.result
+        // Ending iteration alone does not prove that the producer reaped the
+        // running process. Bound its cleanup as well as the consumer's exit.
+        await job.waitForCompletion()
+        #expect(began.duration(to: .now) < .seconds(2))
     }
 
     @Test func nonexistentExecutableThrows() async {
         await #expect(throws: (any Error).self) {
             for try await _ in ProcessRunner.runStreaming("/nonexistent/path/to/binary", arguments: []) {}
         }
-    }
-}
-
-/// Runs `operation`, racing it against a timeout. Returns `true` if the
-/// timeout elapsed first (i.e. `operation` did not finish in time), `false`
-/// if `operation` completed first. Used to keep a cancellation bug from
-/// hanging the test suite.
-private func raced(against timeout: Duration, _ operation: @escaping @Sendable () async -> Void) async -> Bool {
-    await withTaskGroup(of: Bool.self) { group in
-        group.addTask {
-            await operation()
-            return false
-        }
-        group.addTask {
-            try? await Task.sleep(for: timeout)
-            return true
-        }
-        let firstResult = await group.next()!
-        group.cancelAll()
-        return firstResult
     }
 }
 
@@ -123,19 +108,21 @@ private func raced(against timeout: Duration, _ operation: @escaping @Sendable (
     }
 
     @Test func cancelledStreamingJobCannotLeaveChildrenRunning() async throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let ready = folder.appendingPathComponent("ready"), late = folder.appendingPathComponent("late")
+        let fixture = try ProcessTestFixture()
+        defer { fixture.remove() }
+        let job = ProcessRunner.startStreaming("/bin/sh", arguments: fixture.cancellationArguments, timeout: .seconds(10))
         let consumer = Task {
-            for try await _ in ProcessRunner.runStreaming("/bin/sh", arguments: ["-c", "printf ready > \"$1\"; (sleep 1; printf late > \"$2\") & wait", "job", ready.path, late.path]) { }
+            for try await _ in job.events { }
         }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while !FileManager.default.fileExists(atPath: ready.path), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(FileManager.default.fileExists(atPath: ready.path))
+        defer { consumer.cancel(); job.cancel() }
+        _ = try await fixture.waitUntilReady()
+        try fixture.releaseChild()
+        let began = ContinuousClock.now
         consumer.cancel()
         _ = await consumer.result
+        await job.waitForCompletion()
+        #expect(began.duration(to: .now) < .seconds(2))
         try await Task.sleep(for: .milliseconds(1100))
-        #expect(!FileManager.default.fileExists(atPath: late.path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.late.path))
     }
 }

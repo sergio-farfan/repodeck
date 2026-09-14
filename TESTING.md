@@ -13,6 +13,8 @@ The last command produces and verifies a universal development app; it does not 
 
 Keep tests isolated from shared process state: Swift Testing runs unrelated tests concurrently in the same process. Use per-test temporary directories/configuration and injected services. A `.serialized` suite does not serialize itself against unrelated suites.
 
+Subprocess timeout tests measure from the child's readiness timestamp, with a separate bounded wait for a process slot. Cancellation fixtures synchronize with a started descendant before cancelling. Keep execution and cleanup bounds strict without counting unrelated test jobs' queue time against them.
+
 Release workflow validation reuses this native ARM/Intel matrix at one resolved commit and requires both jobs to pass before packaging. Offline release tests use disposable local repositories and fake packaging/GitHub tools to cover stable versus prerelease flags, existing-release refusal, and tags moving after validation; they do not upload, sign, or build the app.
 
 ## Manual acceptance matrix

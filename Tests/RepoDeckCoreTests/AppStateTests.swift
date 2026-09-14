@@ -84,7 +84,9 @@ struct AppStateTests {
         await vm.refreshStatus()
         vm.commitMessage = "Submitted message"
         let task = Task { await vm.commit() }
-        let deadline = ContinuousClock.now + .seconds(5)
+        // A full parallel suite may queue this command behind other jobs.
+        // Cleanup is checked separately after the child has actually started.
+        let deadline = ContinuousClock.now + .seconds(30)
         while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
