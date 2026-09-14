@@ -2,6 +2,8 @@
 
 The scripts build a universal Apple silicon/Intel app and create a GitHub **draft**. Choose whether the draft is a prerelease before preparing it. Public publication remains an explicit maintainer action after verification. Existing releases and their assets are never overwritten.
 
+RepoDeck's standard release is **ad-hoc signed and unnotarized**. The maintainer is not enrolled in the Apple Developer Program; Developer ID signing and notarization are optional future improvements, not prerequisites for a GitHub release. Validate the actual distribution, including the first-launch experience on clean supported Macs, and state its signing status in the release notes.
+
 ## Prepare the source
 
 1. Update `CFBundleShortVersionString` and `CFBundleVersion` in `Support/Info.plist`, add a matching section to `CHANGELOG.md`, and update user-facing documentation.
@@ -17,9 +19,9 @@ CI uses Xcode 26.3 / Swift 6.2 on macOS 15. Select that toolchain for release bu
 Scripts/make-dmg.sh
 ```
 
-This produces `dist/RepoDeck-X.Y.Z.dmg` and its SHA-256 sidecar without contacting GitHub. By default the app is ad-hoc signed for development. Finder layout is best effort; a denied Automation prompt does not invalidate the disk image.
+This produces `dist/RepoDeck-X.Y.Z.dmg` and its SHA-256 sidecar without contacting GitHub. By default the app uses the project's standard ad-hoc signature and is not notarized. Finder layout is best effort; a denied Automation prompt does not invalidate the disk image.
 
-For a Developer ID build, use a signing identity already installed in your login keychain. For notarization, first create an Apple `notarytool` keychain profile using Apple's documented credential setup; never put passwords or signing private keys in the repository.
+If the maintainer later chooses Developer ID distribution, use an identity already installed in the login keychain. Optional notarization additionally uses an Apple `notarytool` keychain profile. This path requires the appropriate Apple membership and credentials; it does not apply to standard RepoDeck releases. Never put passwords or signing private keys in the repository.
 
 ```sh
 SIGN_IDENTITY='Developer ID Application: Your Organization (TEAMID)' \
@@ -37,7 +39,7 @@ After source preparation, run the same command with `--release` to create a draf
 Scripts/make-dmg.sh --release --prerelease
 ```
 
-`--prerelease` requires `--release`, marks the GitHub draft as a prerelease, and sets `--latest=false` so it does not replace the stable download. It does not relax signing or validation gates. The app version and tag stay numeric (`X.Y.Z` / `vX.Y.Z`); prerelease status is GitHub release metadata. Give each new version its own tag. Omit `--prerelease` only when preparing a stable release draft.
+`--prerelease` requires `--release`, marks the GitHub draft as a prerelease, and sets `--latest=false` so it does not replace the stable download. The same source, checksum, testing, and installer checks apply to beta and stable releases; neither requires Developer ID signing or notarization. The app version and tag stay numeric (`X.Y.Z` / `vX.Y.Z`); prerelease status is GitHub release metadata. Give each new version its own tag. Omit `--prerelease` only when preparing a stable release draft.
 
 The script revalidates the tag immediately before upload and uses `gh release create --verify-tag --draft` with the `origin` repository explicitly selected. An existing draft or public release is rejected; recover a failed draft deliberately in GitHub rather than replacing assets automatically.
 
@@ -48,5 +50,7 @@ Source resolution and both validation jobs have read-only repository permissions
 The workflow defaults to an ad-hoc signed draft. Use the local keychain workflow above for Developer ID/notarized artifacts until CI signing credentials are deliberately provisioned. Native CI validation is automatic for workflow-created drafts; local release preparation still requires completing the automated checks on both architectures before the maintainer publishes the draft.
 
 Download and verify the draft's checksum, architecture slices, source revision, signatures, and applicable notarization tickets. Complete the manual matrix in [TESTING.md](../TESTING.md), update the draft notes with actual results, and then publish explicitly. Enable GitHub immutable releases so published tags and assets remain fixed. Never move an already published version tag to repair a release; issue a new version.
+
+For standard unnotarized releases, verify the ad-hoc app signature and disclose the first-launch requirement. After attempting to open a trusted, checksum-verified download, users may need **System Settings → Privacy & Security → Open Anyway**. Availability can depend on macOS and device-management policy; use [Apple's app-specific instructions](https://support.apple.com/en-lamr/102445). Check notarization tickets only when a release is actually advertised as notarized.
 
 Sources: [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution), [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases), [release creation](https://cli.github.com/manual/gh_release_create).

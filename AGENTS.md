@@ -41,6 +41,8 @@ Run Swift tests directly without truncating their output with pipes. Add regress
 
 ## Changes and releases
 
+RepoDeck's standard GitHub distribution is **ad-hoc signed and unnotarized**. The maintainer is not enrolled in the Apple Developer Program. Developer ID signing and notarization are optional future capabilities, not release gates. Validate the chosen distribution and document its signing status and app-specific first-launch approval; do not require enrollment or signing credentials.
+
 Use focused conventional commit subjects and the contributor's configured Git identity. Never commit credentials, personal settings, private repository data, `.build/`, app bundles, or installers. Describe actual validation and remaining limitations in pull requests.
 
 Use Sergio Farfan's existing Git identity for new agent-assisted work. Never add AI author headers, AI authorship notices, or AI `Co-authored-by` trailers to files or commits.

@@ -25,7 +25,7 @@ Track a few dozen local git repositories and one question gets hard to answer at
 Open the `.dmg` and drag **RepoDeck** to **Applications**.
 
 <!-- UNSIGNED-NOTE: remove this block once notarized builds ship. -->
-> Existing development builds may be ad-hoc signed and unnotarized. Check the release notes for signing status; only override a macOS launch warning after verifying the source and checksum. The release scripts now support Developer ID signing and notarization.
+> RepoDeck releases are **ad-hoc signed and not notarized**. After attempting to open a trusted download and verifying its checksum, you may need **System Settings → Privacy & Security → Open Anyway**. See [Apple's first-launch instructions](https://support.apple.com/en-lamr/102445). Developer ID signing and notarization are optional future improvements, not release requirements.
 
 Prefer to build it yourself? See [Build from source](#build-from-source).
 
@@ -107,7 +107,8 @@ Full details per release live in the [CHANGELOG](CHANGELOG.md); installers are o
 
 Unordered and undated — priorities shift with real-world use:
 
-- **Verified public release** — exercise Developer ID signing, notarization, and clean-machine launch checks for the combined beta.
+- **Verified public release** — complete live hosting, accessibility, and clean-machine installation/first-launch checks for the combined ad-hoc signed beta.
+- **Optional signing upgrade** — consider Developer ID signing and notarization only if the maintainer later chooses Apple Developer Program membership.
 - **Broader workflow coverage** — keep extending fixtures for worktrees, unusual paths, file modes, hooks, and multi-account hosting.
 - **PR review state on the badge** — surface approved / changes-requested next to the CI dot (already parsed, not yet shown).
 - **Additional hosting services** — evaluate demand beyond GitHub and GitLab without changing ordinary Git support.

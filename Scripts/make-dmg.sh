@@ -191,8 +191,15 @@ if [ "$RELEASE" -eq 1 ]; then
         if [ -n "${NOTARY_PROFILE:-}" ]; then
           echo "Developer ID signed and notarized."
         else
-          echo "### Development build"
-          echo "Not notarized. Review the signing status before publishing this draft."
+          echo "### Signing and first launch"
+          if [ -n "${SIGN_IDENTITY:-}" ]; then
+            echo "Developer ID signed; not notarized."
+          else
+            echo "Ad-hoc signed and not notarized, the standard RepoDeck distribution."
+          fi
+          echo "Notarization is optional and is not a prerequisite for this GitHub release."
+          echo "After verifying a trusted download and its checksum, users may need System Settings → Privacy & Security → Open Anyway."
+          echo "See Apple's instructions: https://support.apple.com/en-lamr/102445"
         fi
         echo ""
         echo 'Build toolchain:'
@@ -215,5 +222,5 @@ if [ "$RELEASE" -eq 1 ]; then
       RELEASE_OPTIONS+=(--prerelease --latest=false)
     fi
     gh release create "v$VER" "$DMG_FINAL" "$SHA" "$DMG_STABLE" "${RELEASE_OPTIONS[@]}"
-    echo "Draft release created. Verify its assets and signing status before publication."
+    echo "Draft release created. Verify its assets and first-launch experience before publication; notarization is optional."
 fi

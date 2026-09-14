@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- Restore the established ad-hoc signed, unnotarized GitHub distribution policy. Developer ID signing and notarization are optional; release checks cover the chosen distribution and its first-launch instructions.
+
 ## [1.10.1] - Beta draft (2026-09-13)
 
 Follow-up to the combined Git-client beta in 1.10.0; public distribution remains pending the manual release gates.
@@ -39,7 +43,7 @@ Prepared as a prerelease draft; public distribution is pending the manual releas
 
 ### Beta limits
 
-- Live hosting permissions/protection, VoiceOver/appearance acceptance, Developer ID notarization, and downloaded-installer checks remain release gates; see `TESTING.md`.
+- Live hosting permissions/protection, VoiceOver/appearance acceptance, and clean-machine downloaded-installer checks remain release gates; see `TESTING.md`. Developer ID signing and notarization are optional and are not required for the standard ad-hoc signed distribution.
 - Interactive rebase editing, inline threaded-review editing, issue tracking, and non-macOS ports remain later milestones.
 
 ## [1.9.0] - 2026-07-20
